@@ -9,8 +9,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚡ WhatsApp Automated Audit Extractor (Fixed Multi-Format)")
-st.write("Versi perbaikan mendeteksi format chat vertikal dengan urutan kata 'NOT FOUND' di bagian mana pun.")
+st.title("⚡ WhatsApp Automated Audit Extractor (Fixed QTY# & PN)")
+st.write("Versi update untuk akurasi penarikan format **QTY#**, **PN#** dengan tanda miring (/), dan lokasi **BIN**.")
 
 st.divider()
 
@@ -20,7 +20,7 @@ if uploaded_file is not None:
     stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
     chat_content = stringio.read()
     
-    # Pecah balon chat berdasarkan timestamp WhatsApp
+    # Pecah per balon chat berdasarkan format timestamp WhatsApp
     message_blocks = re.split(r'(?=\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*)', chat_content)
     
     parsed_data = []
@@ -29,88 +29,85 @@ if uploaded_file is not None:
         if not block.strip():
             continue
             
-        # Cek apakah balon chat mengandung kata 'NOT FOUND' (di posisi mana pun)
-        if "not found" in block.lower():
+        # Filter chat yang mengandung kata 'NOT FOUND' atau 'FOUND'
+        if "not found" in block.lower() or "found" in block.lower():
             lines = block.split("\n")
             
-            # Variabel penampung data per blok chat
-            loc_val = "-"
-            bin_val = "-"
-            pn_val = "-"
-            sn_val = "-"
-            qty_val = 1
-            remark_val = "Found"
+            # 1. Cek dulu apakah ini tipe chat vertikal (pakai titik dua ':') seperti kasus sebelumnya
+            is_vertical_format = any(":" in line.strip() and not line.strip().startswith(tuple(str(i) for i in range(10))) for line in lines)
             
-            # Flag untuk mendeteksi apakah ini format vertikal/titik dua
-            is_vertical_format = False
-            
-            # Koreksi 1: Ekstraksi presisi dengan basis pencarian baris vertikal (Mendeteksi tanda ':')
-            for line in lines:
-                line_clean = line.strip()
-                if ":" in line_clean:
-                    parts = line_clean.split(":", 1)
-                    key = parts[0].strip().upper()
-                    val = parts[1].strip()
-                    
-                    if "LOC" in key:
-                        loc_val = val
-                        is_vertical_format = True
-                    elif "BIN" in key:
-                        bin_val = val
-                        is_vertical_format = True
-                    elif "PN" in key:
-                        # Mengambil seluruh isi setelah 'PN:' tanpa terpotong tanda miring (/)
-                        pn_val = val
-                        is_vertical_format = True
-                    elif "SN" in key:
-                        sn_val = val
-                        is_vertical_format = True
-                    elif "QTY EMRO" in key or "QTY" in key:
-                        # Ambil angka saja dari QTY
-                        qty_match = re.search(r'(\d+)', val)
-                        if qty_match:
-                            qty_val = int(qty_match.group(1))
-            
-            # Cari baris penyelesaian/remarks tambahan di luar struktur titik dua
-            for line in lines:
-                if "Penyelesaian" in line or "*" in line:
-                    remark_val = line.replace("*", "").replace("Penyelesaian :", "").strip()
-                    break
-
-            # Jika formatnya vertikal, langsung masukkan data yang sudah dikumpulkan
             if is_vertical_format:
+                loc_val, bin_val, pn_val, sn_val, qty_val, remark_val = "-", "-", "-", "-", 1, "Found"
+                for line in lines:
+                    line_clean = line.strip()
+                    if ":" in line_clean:
+                        parts = line_clean.split(":", 1)
+                        key = parts[0].strip().upper()
+                        val = parts[1].strip()
+                        
+                        if "LOC" in key: loc_val = val
+                        elif "BIN" in key: bin_val = val
+                        elif "PN" in key: pn_val = val
+                        elif "SN" in key: sn_val = val
+                        elif "QTY" in key:
+                            qty_match = re.search(r'(\d+)', val)
+                            if qty_match: qty_val = int(qty_match.group(1))
+                            
+                for line in lines:
+                    if "Penyelesaian" in line or "*" in line:
+                        remark_val = line.replace("*", "").replace("Penyelesaian :", "").strip()
+                        break
+                        
                 parsed_data.append({
-                    "Loc": loc_val,
-                    "BIN": bin_val,
-                    "PN": pn_val,
-                    "SN": sn_val,
-                    "Quantity": qty_val,
-                    "Remark": remark_val if remark_val != "Found" else "Found at location"
+                    "Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val
                 })
+                
             else:
-                # Koreksi 2: Jalankan pencarian horizontal/looping biasa jika format chat-nya tipe lama (PN# , SN#)
-                has_items = False
-                # Cari ulang info BIN & Loc global di chat tipe lama
+                # 2. FORMAT HORIZONTAL / BEBAS (Seperti Kasus Chat Terbaru Lu)
+                # Cari lokasi BIN global di dalam satu blok chat ini
                 bin_match = re.search(r'(?:BIN|AT|DI)\s*#?\s*([A-Za-z0-9\-]+)', block, re.IGNORECASE)
                 bin_global = bin_match.group(1) if bin_match else "-"
                 loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
                 
+                # Cari info remark/keterangan penyelesaian (misal: transfer ke BIN lain)
+                remark_global = "Found at BIN"
                 for line in lines:
-                    if any(x in line.upper() for x in ["PN", "PART NUMBER"]):
+                    if "TRANSFER TO" in line.upper() or "ISSUED BY" in line.upper():
+                        remark_global = line.strip()
+                        break
+                
+                has_items = False
+                for line in lines:
+                    # Deteksi baris yang berisi informasi PN atau PART NUMBER
+                    if any(x in line.upper() for x in ["PN#", "PN", "PART NUMBER"]):
                         has_items = True
-                        pn_match = re.search(r'(?:PN|Part\s*Number|Part\s*No)[:#\-\s]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
-                        sn_match = re.search(r'(?:SN|Serial|S/N)[:#\-\s]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
                         
+                        # Ambil nilai PN secara presisi (bisa membaca format huruf, angka, tanda minus, dan tanda miring)
+                        pn_match = re.search(r'(?:PN#|PN|Part\s*Number)[:\s-]*([A-Za-z0-9\-/]+)', line, re.IGNORECASE)
+                        pn_val = pn_match.group(1).strip() if pn_match else "-"
+                        
+                        # Ambil nilai SN jika ada
+                        sn_match = re.search(r'(?:SN#|SN|Serial|S/N)[:\s-]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
+                        sn_val = sn_match.group(1).strip() if sn_match else "-"
+                        
+                        # Ambil nilai QTY (Mendukung format: QTY#54, QTY: 54, atau 54 pcs)
+                        qty_match = re.search(r'(?:QTY#|QTY)[:\s-]*(\d+)|(\d+)\s*(?:pcs|qty|item)', line, re.IGNORECASE)
+                        if qty_match:
+                            # Ambil grup regex mana saja yang berhasil menangkap angka
+                            qty_val = int(qty_match.group(1)) if qty_match.group(1) else int(qty_match.group(2))
+                        else:
+                            qty_val = 1
+                            
                         parsed_data.append({
                             "Loc": loc_global,
                             "BIN": bin_global,
-                            "PN": pn_match.group(1) if pn_match else "-",
-                            "SN": sn_match.group(1) if sn_match else "-",
-                            "Quantity": 1,
-                            "Remark": "Found at BIN (Format Borongan)"
+                            "PN": pn_val,
+                            "SN": sn_val,
+                            "Quantity": qty_val,
+                            "Remark": remark_global
                         })
-                
-                # Pengaman untuk chat pendek tanpa format PN/SN yang jelas
+                        
+                # Pengaman jika chat tidak menggunakan format penulisan item 'PN' yang jelas
                 if not has_items:
                     parsed_data.append({
                         "Loc": loc_global,
@@ -118,16 +115,14 @@ if uploaded_file is not None:
                         "PN": "-",
                         "SN": "-",
                         "Quantity": 1,
-                        "Remark": f"Review Manual: {block.strip()[:100]}..."
+                        "Remark": block.strip()[:150]
                     })
 
     if parsed_data:
         df = pd.DataFrame(parsed_data)
-        
-        st.success(f"🎉 Mantap! Berhasil memproses data chat. Total terdeteksi: {len(df)} baris data.")
+        st.success(f"🎉 Sukses! Berhasil memproses data chat. Total terdeteksi: {len(df)} baris data.")
         st.dataframe(df, use_container_width=True)
         
-        # Simpan ke Excel
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
@@ -136,9 +131,7 @@ if uploaded_file is not None:
         st.download_button(
             label="📊 Download File Excel Langsung (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_pembelaan_fixed.xlsx",
+            file_name="rekap_pembelaan_fixed_v2.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
-    else:
-        st.warning("⚠️ File berhasil dibaca, tetapi tidak ada pola data audit yang cocok.")
