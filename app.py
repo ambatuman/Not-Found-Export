@@ -9,100 +9,97 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚡ WhatsApp Automated Audit Extractor (Zero Input)")
-st.write("Upload file `.txt` chat WhatsApp lu, sistem bakal otomatis nge-parsing semua temuan **'not found'** jadi tabel Excel tanpa lu perlu ngetik apa-apa lagi.")
+st.title("⚡ WhatsApp Automated Audit Extractor (Universal Format)")
+st.write("Aplikasi ini otomatis mendukung chat tipe **satuan (non-looping)** maupun **banyak barang sekaligus (looping)**.")
 
 st.divider()
 
-# Tempat upload file .txt
 uploaded_file = st.file_uploader("Upload file chat WhatsApp (.txt) di sini:", type=["txt"])
 
 if uploaded_file is not None:
-    # Membaca isi file text
     stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
-    chat_lines = stringio.readlines()
+    chat_content = stringio.read()
+    
+    # Pecah per balon chat berdasarkan format timestamp WhatsApp
+    message_blocks = re.split(r'(?=\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*)', chat_content)
     
     parsed_data = []
     
-    # Looping otomatis untuk menyaring data chat
-    for line in chat_lines:
-        if "not found" in line.lower():
-            clean_line = line.strip()
+    for block in message_blocks:
+        if not block.strip():
+            continue
             
-            # 1. Bersihkan format timestamp & nama pengirim dari WhatsApp
-            message_content = clean_line
-            if " - " in clean_line and ":" in clean_line:
-                parts = clean_line.split(":", 1)
-                if len(parts) > 1 and " - " in parts[0]:
-                    message_content = parts[1].strip()
-            elif "]" in clean_line and ":" in clean_line:
-                parts = clean_line.split(":", 2)
-                message_content = parts[-1].strip()
-                
-            # 2. EKSTRAKSI OTOMATIS MENGGUNAKAN LOGIKA TEKS (REGEX)
-            
-            # Cari lokasi BIN / Lokasi setelah kata "AT" atau "DI" (Contoh: BAT-TL088-AVL10)
-            bin_match = re.search(r'(?:not found at|not found di)\s+([A-Za-z0-9\-]+)', message_content, re.IGNORECASE)
+        # Filter hanya chat yang berisi pembelaan atas temuan "NOT FOUND"
+        if "not found" in block.lower():
+            # 1. Cari lokasi BIN (Mendukung format: BIN BAT-TL291, AT BAT-TL078, atau BIN-A01)
+            bin_match = re.search(r'(?:BIN|AT|DI)\s*#?\s*([A-Za-z0-9\-]+)', block, re.IGNORECASE)
             bin_val = bin_match.group(1) if bin_match else "-"
             
-            # Ambil singkatan lokasi depan dari nama BIN jika ada (Contoh: BAT dari BAT-TL088)
+            # Ambil prefiks lokasi gudang (Loc) jika ada tanda minus (-) di nama BIN
             loc_val = "-"
             if bin_val != "-" and "-" in bin_val:
                 loc_val = bin_val.split("-")[0]
-            
-            # Cari remark/keterangan tambahan di dalam tanda kurung (Contoh: MISSING AT EMRO)
-            remark_match = re.search(r'\((.*?)\)', message_content)
-            remark_val = remark_match.group(1) if remark_match else "-"
-            
-            # Jika polanya polos tanpa kurung, teks aslinya kita jadikan remark
-            if bin_val == "-" and remark_val == "-":
-                remark_val = message_content
                 
-            # Deteksi otomatis Part Number (PN) jika tertulis di chat
-            pn_match = re.search(r'(?:PN|Part Number)[:\s-]*([A-Za-z0-9\-]+)', message_content, re.IGNORECASE)
-            pn_val = pn_match.group(1) if pn_match else "-"
+            lines = block.split("\n")
+            has_items = False
             
-            # Deteksi otomatis Serial Number (SN) jika tertulis di chat
-            sn_match = re.search(r'(?:SN|Serial|S/N)[:\s-]*([A-Za-z0-9\-]+)', message_content, re.IGNORECASE)
-            sn_val = sn_match.group(1) if sn_match else "-"
+            # 2. Scan per baris untuk mencari PN dan SN
+            for line in lines:
+                # Regex fleksibel: Bisa mendeteksi PN#, PN:, PN-, atau Part Number
+                if any(x in line.upper() for x in ["PN", "PART NUMBER", "PART NO"]):
+                    has_items = True
+                    
+                    # Ekstraksi kode PN (mengambil karakter alfanumerik setelah tanda pemisah)
+                    pn_match = re.search(r'(?:PN|Part\s*Number|Part\s*No)[:#\-\s]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
+                    pn_val = pn_match.group(1) if pn_match else "-"
+                    
+                    # Ekstraksi kode SN jika ada di baris tersebut
+                    sn_match = re.search(r'(?:SN|Serial|S/N)[:#\-\s]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
+                    sn_val = sn_match.group(1) if sn_match else "-"
+                    
+                    # Cari quantity spesifik di baris tersebut, jika tidak ada default ke 1
+                    qty_match = re.search(r'(\d+)\s*(?:pcs|qty|item|buah)', line, re.IGNORECASE)
+                    qty_val = int(qty_match.group(1)) if qty_match else 1
+                    
+                    parsed_data.append({
+                        "Loc": loc_val,
+                        "BIN": bin_val,
+                        "PN": pn_val,
+                        "SN": sn_val,
+                        "Quantity": qty_val,
+                        "Remark": "Found at BIN"
+                    })
             
-            # Deteksi quantity jika terdeteksi format angka (default 1 kalau tidak tertulis spesifik)
-            qty_match = re.search(r'(\d+)\s*(?:pcs|qty|item|buah)', message_content, re.IGNORECASE)
-            qty_val = int(qty_match.group(1)) if qty_match else 1
-            
-            # Gabungkan semua ke bentuk baris Excel
-            parsed_data.append({
-                "Loc": loc_val,
-                "BIN": bin_val,
-                "PN": pn_val,
-                "SN": sn_val,
-                "Quantity": qty_val,
-                "Remark": f"Auto-extracted: {message_content}" if remark_val == "-" else remark_val
-            })
-            
+            # 3. ANTISIPASI NON-LOOPING POLOS
+            # Jika chat mengandung 'NOT FOUND' & info 'BIN' tapi auditee nulisnya polos tanpa sebut kata 'PN' atau 'SN'
+            if not has_items:
+                parsed_data.append({
+                    "Loc": loc_val,
+                    "BIN": bin_val,
+                    "PN": "-",
+                    "SN": "-",
+                    "Quantity": 1,
+                    "Remark": f"Review Manual: {block.strip()[:100]}..."
+                })
+
     if parsed_data:
         df = pd.DataFrame(parsed_data)
         
-        st.success(f"🎉 Mantap! Otomatis mendeteksi dan mengekstrak {len(df)} baris data 'Not Found'.")
-        
-        # Tampilkan Preview Tabel Lengkap biar lu bisa ngecek hasilnya langsung di web
-        st.markdown("### 📋 Preview Data Hasil Parsing Otomatis")
+        st.success(f"🎉 Mantap! Berhasil memproses data chat. Total terdeteksi: {len(df)} baris data.")
         st.dataframe(df, use_container_width=True)
         
-        # Proses konversi data langsung ke Excel (.xlsx) di dalam background
+        # Buat Excel
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Automated_Findings')
+            df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
             
-        # Tombol Download Excel Langsung muncul tanpa interaksi tambahan
         st.markdown("### 📥 Download File Excel Lu")
         st.download_button(
             label="📊 Download File Excel Langsung (.xlsx)",
             data=buffer.getvalue(),
-            file_name="hasil_otomatis_chat_audit.xlsx",
+            file_name="rekap_pembelaan_universal.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
     else:
-        st.warning("⚠️ File `.txt` berhasil dibaca, tapi gak ada chat yang mengandung kata kunci 'not found'.")
-        
+        st.warning("⚠️ File berhasil dibaca, tapi tidak ada pola data audit yang cocok.")
