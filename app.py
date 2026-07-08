@@ -9,8 +9,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Multi-Location Engine - Fixed)")
-st.write("Versi Akurasi Tinggi & Super Steril: Dijamin bersih total dari data Unrecorded, Wrong Binning, Surplus, maupun Minus.")
+st.title("✈️ WhatsApp Automated Audit Extractor (Multi-Location Engine - Space Fixed)")
+st.write("Versi Mutakhir: Memperbaiki akurasi penarikan Part Number yang mengandung spasi di tengah kalimat seperti kode ELF 1001/3300.")
 
 st.divider()
 
@@ -63,8 +63,8 @@ if uploaded_file is not None:
                         elif "BIN" in key and bin_val == "-": 
                             bin_val = val
                         elif "P/N" in key or "PN" in key or "PART NUMBER" in key: 
-                            # Ekstraksi format vertikal agar kebal tanda titik (.)
-                            pn_clean_match = re.search(r'([A-Za-z0-9\-/.]+)', val)
+                            # PERBAIKAN UTAMA: Ditambahkan \s agar kebal terhadap Part Number yang mengandung spasi tengah (Contoh: ELF 1001/3300)
+                            pn_clean_match = re.search(r'([A-Za-z0-9\-/.\s]+)', val)
                             pn_val = pn_clean_match.group(1).strip() if pn_clean_match else val
                             if val != "-" and val != "":
                                 has_pn_vertical = True
@@ -134,7 +134,6 @@ if uploaded_file is not None:
                             
                 loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
                 
-                # DI SINI YANG TADI SALAH: Sudah diubah ke 'for k in ...' agar loop berjalan normal tanpa TypeError
                 for line in reversed(clean_lines):
                     if any(k in line.upper() for k in ["FOUND", "TRANSFER", "ISSUED", "REMARK"]):
                         remark_global = line.strip()
@@ -142,8 +141,8 @@ if uploaded_file is not None:
                 
                 for line in clean_lines:
                     if any(x in line.upper() for x in ["PN#", "PN ", "PART NUMBER"]):
-                        # Regex horizontal ditambahkan titik ([A-Za-z0-9\-/.]+) agar J.3/8LA terbaca utuh
-                        pn_match = re.search(r'(?:PN#|PN|Part\s*Number)[:\s-]*([A-Za-z0-9\-/.]+)', line, re.IGNORECASE)
+                        # Ditambahkan \s di regex horizontal agar kebal spasi tengah juga
+                        pn_match = re.search(r'(?:PN#|PN|Part\s*Number)[:\s-]*([A-Za-z0-9\-/.\s]+)', line, re.IGNORECASE)
                         sn_match = re.search(r'(?:SN#|SN|Serial|S/N)[:\s-]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
                         qty_match = re.search(r'(?:QTY#|QTY)[:\s-]*(\d+)|(\d+)\s*(?:pcs|qty|item)', line, re.IGNORECASE)
                         
@@ -171,7 +170,7 @@ if uploaded_file is not None:
         # Rekonsiliasi data duplikat update chat (keep='last')
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sempurna! Aplikasi Multi-Lokasi siap digunakan harian. Total data final valid: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Masalah Part Number berspasi berhasil diatasi. Total data final valid: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
