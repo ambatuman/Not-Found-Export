@@ -4,13 +4,13 @@ import re
 import io
 
 st.set_page_config(
-    page_title="WhatsApp Audit Extractor - Strict Pure Text Mode",
+    page_title="WhatsApp Audit Extractor - Universal Ultimate Engine",
     page_icon="✈️",
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Murni Teks WhatsApp - Fixed)")
-st.write("Versi Steril Sempurna: Memperbaiki bug kolom BIN & Loc yang terseret kalimat 'TOOL FOUND AT BIN' pada format horizontal Batam.")
+st.title("✈️ WhatsApp Automated Audit Extractor (Universal Ultimate Engine)")
+st.write("Versi Super Lem: Mempertahankan 100% logika teks universal lama + Jaring Otomatis untuk stasiun yang hanya kirim foto kosongan.")
 
 st.divider()
 
@@ -25,6 +25,9 @@ if uploaded_file is not None:
     
     parsed_data = []
     
+    # List bantuan untuk menampung riwayat komplain (Not Found / Missing) demi fitur backtrack foto
+    complaint_history = []
+    
     for block in message_blocks:
         if not block.strip():
             continue
@@ -32,7 +35,9 @@ if uploaded_file is not None:
         block_lower = block.lower()
         lines = block.split("\n")
         
-        # Saring awal: Harus mengandung unsur dispute penemuan barang (not found / missing / found)
+        # -------------------------------------------------------------------------
+        # ALUR 1: LOGIKA UNIVERSAL LAMA (TEKS JELAS & ADA KATA KUNCI PEMBELAAN)
+        # -------------------------------------------------------------------------
         if "not found" in block_lower or "missing" in block_lower or "found" in block_lower:
             
             # --- DETEKSI FORMAT VERTIKAL / STRUCTURED FORM ---
@@ -43,7 +48,6 @@ if uploaded_file is not None:
                 additional_remark = ""
                 has_pn_vertical = False
                 
-                # Cari nomor finding secara dinamis jika ada
                 finding_no = ""
                 find_match = re.search(r'(?:Finding No|No Finding|No\.)\s*(\d+)', block, re.IGNORECASE)
                 if find_match and not find_match.group(0).upper().startswith("PN"):
@@ -75,7 +79,6 @@ if uploaded_file is not None:
                         elif "REMARK" in key: 
                             remark_val = val
 
-                # Cari kalimat aksi penemuan di sisa baris teks bebas
                 action_remark = ""
                 for line in lines:
                     line_upper = line.upper()
@@ -95,9 +98,11 @@ if uploaded_file is not None:
                 remark_val = finding_no + remark_val + action_remark + additional_remark
 
                 if has_pn_vertical and pn_val != "-":
-                    parsed_data.append({
-                        "Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val
-                    })
+                    item = {"Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val}
+                    parsed_data.append(item)
+                    # Catat ke history untuk cadangan backtrack jika statusnya komplain (bukan resolve murni harian)
+                    if "NOT FOUND" in block_upper or "MISSING" in block_upper:
+                        complaint_history.append(item)
                 
             else:
                 # --- FORMAT HORIZONTAL / BORONGAN TEKS BEBAS ---
@@ -110,11 +115,9 @@ if uploaded_file is not None:
                 for line in clean_lines:
                     line_upper = line.upper()
                     if any(k in line_upper for k in ["FOUND AT", "TRANSFER BIN", "TRANSFER TO"]):
-                        # PERBAIKAN 1: Cari kode BIN alfanumerik murni yang ber-strip (Contoh langsung ambil BAT-TL292)
                         bin_match = re.search(r'\b([A-Za-z0-9\s]+-[A-Za-z0-9\s\-]+)\b', line)
                         if bin_match:
                             raw_bin = bin_match.group(1).strip()
-                            # Buang sampah kalimat penunjuk jalan di depan kode aslinya jika ikut ketarik
                             if "BIN " in raw_bin.upper():
                                 raw_bin = raw_bin.upper().split("BIN ")[-1].strip()
                             bin_global = raw_bin
@@ -129,11 +132,9 @@ if uploaded_file is not None:
                                 bin_global = potential_bin
                                 break
                             
-                # Bersihkan kolom BIN jika masih ketarik text 'TOOL FOUND AT' sebelum diolah kolom Loc-nya
                 if "FOUND AT " in bin_global.upper():
                     bin_global = bin_global.upper().split("FOUND AT ")[-1].replace("BIN ", "").strip()
                 
-                # Ambil prefiks lokasi dari BIN horizontal jika menggunakan format strip (Misal BAT-TL291 -> BAT)
                 loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
                 
                 for line in reversed(clean_lines):
@@ -152,9 +153,27 @@ if uploaded_file is not None:
                         else:
                             qty_val = 1
                             
-                        parsed_data.append({
-                            "Loc": loc_global, "BIN": bin_global, "PN": pn_match.group(1).strip() if pn_match else "-", "SN": sn_match.group(1).strip() if sn_match else "-", "Quantity": qty_val, "Remark": remark_global
-                        })
+                        item = {"Loc": loc_global, "BIN": bin_global, "PN": pn_match.group(1).strip() if pn_match else "-", "SN": sn_match.group(1).strip() if sn_match else "-", "Quantity": qty_val, "Remark": remark_global}
+                        parsed_data.append(item)
+                        if "NOT FOUND" in block_lower or "missing" in block_lower:
+                            complaint_history.append(item)
+
+        # -------------------------------------------------------------------------
+        # ALUR 2: LOGIKA EMERGENCY (STASIUN PARAH - BOM FOTO KOSONGAN TANPA TEKS)
+        # -------------------------------------------------------------------------
+        elif "<media omitted>" in block_lower and not any(k in block_lower for k in ["pn", "sn", "part"]):
+            # Jika ada riwayat komplain di atasnya, ambil data komplain terakhir sebagai target penemuan gambar ini
+            if complaint_history:
+                last_complaint = complaint_history[-1] # Ambil komplain terdekat di atasnya
+                
+                parsed_data.append({
+                    "Loc": last_complaint["Loc"],
+                    "BIN": last_complaint["BIN"],
+                    "PN": last_complaint["PN"],
+                    "SN": last_complaint["SN"],
+                    "Quantity": last_complaint["Quantity"],
+                    "Remark": f"Resolved via Photo Evidence (Automatic Timeline Radius Match) 📸"
+                })
 
     if parsed_data:
         df_raw = pd.DataFrame(parsed_data)
@@ -162,7 +181,7 @@ if uploaded_file is not None:
         # Tameng filter surplus / minus harian murni tanpa status pencarian barang
         def filter_strict_pembelaan(row):
             rem = str(row['Remark']).upper()
-            if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]):
+            if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]) and "PHOTO" not in rem:
                 return False
             return True
 
@@ -192,18 +211,18 @@ if uploaded_file is not None:
         # Rekonsiliasi data duplikat update chat (keep='last')
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sukses! Kolom BIN & Loc Batam berhasil dibersihkan total secara steril. Total: {len(df)} baris.")
+        st.success(f"🎉 Sukses Besar! Kodingan Kompatibilitas Tinggi Berhasil Diluncurkan. Total data valid: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
             
-        st.markdown("### 📥 Download File Excel Hasil Perbaikan")
+        st.markdown("### 📥 Download File Excel Hasil Gabungan")
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_pembelaan_asli_wa_fixed.xlsx",
+            file_name="rekap_pembelaan_ultimate_universal.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
