@@ -9,8 +9,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚡ WhatsApp Automated Audit Extractor (Ultimate Version)")
-st.write("Versi Final: Dibuat khusus berdasarkan struktur riil ekspor chat WhatsApp Stock Opname Base Maintenance.")
+st.title("⚡ WhatsApp Automated Audit Extractor (Filter Temuan Not Found)")
+st.write("Versi Steril: Hanya mengambil status temuan awal **NOT FOUND / MISSING** yang sudah ditemukan, bebas dari berkas wrong binning / surplus murni.")
 
 st.divider()
 
@@ -20,7 +20,7 @@ if uploaded_file is not None:
     stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
     chat_content = stringio.read()
     
-    # Pecah per balon chat berdasarkan format timestamp & nama pengirim di WhatsApp
+    # Pecah per balon chat berdasarkan format timestamp WhatsApp
     message_blocks = re.split(r'(?=\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*)', chat_content)
     
     parsed_data = []
@@ -31,17 +31,18 @@ if uploaded_file is not None:
             
         block_lower = block.lower()
         
-        # Saring hanya pesan yang relevan dengan temuan / pembelaan barang yang dicari
-        if any(keyword in block_lower for keyword in ["not found", "missing", "unrecord", "wrong binning"]):
+        # SAKTI: Kunci mati filter hanya untuk chat yang mengandung dispute lost awal (NOT FOUND / MISSING)
+        if "not found" in block_lower or "missing" in block_lower:
             lines = block.split("\n")
             
-            # Deteksi apakah blok ini merupakan format teks vertikal terstruktur (ada properti titik dua)
+            # Cek format vertikal terstruktur (titik dua)
             is_vertical_format = any(":" in line.strip() and not line.strip().startswith(tuple(str(i) for i in range(10))) for line in lines)
             
             if is_vertical_format:
                 loc_val, bin_val, pn_val, sn_val, qty_val, remark_val = "-", "-", "-", "-", 1, "-"
                 additional_remark = ""
                 
+                # Saring isi form internal vertikal
                 for line in lines:
                     line_clean = line.strip()
                     if ":" in line_clean and not line_clean.startswith(tuple(str(i) for i in range(10))):
@@ -49,8 +50,13 @@ if uploaded_file is not None:
                         key = parts[0].strip().upper()
                         val = parts[1].strip()
                         
+                        # Jika tertulis REMARKS murni berisi SURPLUS atau UNRECORDED tanpa info missing, tandai untuk di-skip nanti
+                        if "REMARK" in key and val.upper() in ["SURPLUS", "UNRECORDED"]:
+                            # Skip jika tidak ada penemuan
+                            pass
+                        
                         if "LOC" in key: loc_val = val
-                        elif "BIN EMRO" in key: bin_val = val # Ambil BIN EMRO jika tersedia
+                        elif "BIN EMRO" in key: bin_val = val
                         elif "BIN ACTUAL" in key or "BIN ACT" in key: bin_val = val
                         elif "BIN" in key and bin_val == "-": bin_val = val
                         elif "PN" in key: pn_val = val
@@ -63,7 +69,10 @@ if uploaded_file is not None:
                             if qty_match: qty_val = int(qty_match.group(1))
                         elif "REMARK" in key: remark_val = val
 
-                # Grab catatan kaki / kalimat update penyelesaian di bawah form vertikal
+                # Skip chat vertikal yang isinya murni 'WRONG BINNING' atau 'UNRECORDED' biasa tanpa ada dispute not found
+                if "wrong binning" in remark_val.lower() and "not found" not in block_lower and "missing" not in block_lower:
+                    continue
+
                 for line in lines:
                     if "PENYELESAIAN" in line.upper() or line.strip().startswith("*"):
                         additional_remark = " " + line.strip().replace("*", "")
@@ -72,30 +81,25 @@ if uploaded_file is not None:
                 if remark_val == "-" or remark_val == "": remark_val = "Found"
                 if additional_remark: remark_val = remark_val + additional_remark
                 
-                # Jaga-jaga bersihkan string SN penulisan strip
-                if sn_val == "-": sn_val = "-"
-
                 parsed_data.append({
                     "Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val
                 })
                 
             else:
-                # FORMAT HORIZONTAL / BORONGAN BANYAK ITEM (PN# , SN#)
-                # Bersihkan metadata pengirim di awal baris agar tidak bocor ke kolom BIN
+                # FORMAT HORIZONTAL / BORONGAN BANYAK ITEM (Kasus WCI-SR-08-2-N)
                 clean_block = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*[^:]+:\s*', '', block, flags=re.IGNORECASE)
                 clean_lines = clean_block.split("\n")
                 
                 bin_global = "-"
                 remark_global = "Found"
                 
-                # Cari baris lokasi BIN di bagian bawah chat borongan
+                # Cari baris lokasi BIN (Mendukung pencarian case-insensitive)
                 for line in clean_lines:
                     line_upper = line.upper()
-                    if "BIN" in line_upper or "FOUND AT" in line_upper or "LOC" in line_upper:
+                    if any(k in line_upper for k in ["BIN", "FOUND AT", "TRANSFER"]):
                         bin_match = re.search(r'\b([A-Za-z0-9]+-[A-Za-z0-9\-]+)\b', line)
                         if bin_match:
                             bin_global = bin_match.group(1).strip()
-                            remark_global = line.strip()
                             break
                 
                 if bin_global == "-":
@@ -103,10 +107,15 @@ if uploaded_file is not None:
                         bin_match = re.search(r'(?:BIN|AT|DI)\s*#?\s*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
                         if bin_match and bin_match.group(1).upper() not in ["BIN", "AT", "DI", "FOUND"]:
                             bin_global = bin_match.group(1).strip()
-                            remark_global = line.strip()
                             break
                             
                 loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
+                
+                # Ambil kalimat pembelaan paling bawah secara dinamis sebagai Remark
+                for line in reversed(clean_lines):
+                    if any(k in line.upper() for k in ["FOUND", "TRANSFER", "ISSUED", "REMARK"]):
+                        remark_global = line.strip()
+                        break
                 
                 has_items = False
                 for line in clean_lines:
@@ -137,10 +146,10 @@ if uploaded_file is not None:
 
     if parsed_data:
         df_raw = pd.DataFrame(parsed_data)
-        # Rekonsiliasi data: Ambil update chat paling terakhir (keep='last') berdasarkan kecocokan BIN, PN, dan SN
+        # Hapus duplikat, simpan yang paling terakhir di-update
         df = df_raw.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sukses Besar! Berhasil mengekstrak {len(df)} data valid dari file log chat lu.")
+        st.success(f"🎉 Sukses Bersih! Berhasil merapikan rekap. Total data final valid: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
@@ -151,7 +160,7 @@ if uploaded_file is not None:
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_pembelaan_ultimate.xlsx",
+            file_name="rekap_pembelaan_clean_final.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
