@@ -4,17 +4,17 @@ import re
 import io
 
 st.set_page_config(
-    page_title="WhatsApp Multi-Location Audit Extractor",
+    page_title="WhatsApp Audit Extractor - Pure Text Mode",
     page_icon="✈️",
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Multi-Location - Ultimate Fixed)")
-st.write("Versi Sempurna: Memperbaiki bug nama BIN ber-spasi (Cons 3, ROT FLOOR 1), membersihkan BIN 'actual', dan memperbaiki pergeseran baris data PN.")
+st.title("✈️ WhatsApp Automated Audit Extractor (Murni Teks WhatsApp)")
+st.write("Versi Standar: Kolom Loc & BIN murni ditarik berdasarkan apa yang tertulis di dalam chat tanpa tebak-tebakan bandara.")
 
 st.divider()
 
-uploaded_file = st.file_uploader("Upload file chat WhatsApp (.txt) lokasi mana saja di sini:", type=["txt"])
+uploaded_file = st.file_uploader("Upload file chat WhatsApp (.txt) di sini:", type=["txt"])
 
 if uploaded_file is not None:
     stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
@@ -35,7 +35,7 @@ if uploaded_file is not None:
         # Saring awal: Harus mengandung unsur dispute penemuan barang (not found / missing / found)
         if "not found" in block_lower or "missing" in block_lower or "found" in block_lower:
             
-            # --- DETEKSI FORMAT VERTIKAL / SUB S1 STYLE ---
+            # --- DETEKSI FORMAT VERTIKAL / STRUCTURED FORM ---
             is_vertical_format = any(":" in line.strip() and not line.strip().startswith(tuple(str(i) for i in range(10))) for line in lines)
             
             if is_vertical_format:
@@ -43,10 +43,10 @@ if uploaded_file is not None:
                 additional_remark = ""
                 has_pn_vertical = False
                 
-                # Cari nomor finding untuk style Surabaya jika tersedia
+                # Cari nomor finding secara dinamis jika ada
                 finding_no = ""
-                find_match = re.search(r'(?:Finding No|No Finding)\s*(\d+)', block, re.IGNORECASE)
-                if find_match:
+                find_match = re.search(r'(?:Finding No|No Finding|No\.)\s*(\d+)', block, re.IGNORECASE)
+                if find_match and not find_match.group(0).upper().startswith("PN"):
                     finding_no = f"Finding No.{find_match.group(1)} - "
                 
                 for line in lines:
@@ -57,7 +57,7 @@ if uploaded_file is not None:
                         val = parts[1].strip()
                         
                         if "LOC" in key: 
-                            loc_val = val
+                            loc_val = val # Murni mengambil apa yang diketik mekanik/storemen di WA
                         elif "BIN EMRO" in key or "BIN ACTUAL" in key or "BIN ACT" in key: 
                             bin_val = val
                         elif "BIN" in key and bin_val == "-": 
@@ -75,7 +75,7 @@ if uploaded_file is not None:
                         elif "REMARK" in key: 
                             remark_val = val
 
-                # Cari kalimat aksi penemuan (Found at / RTS Done) untuk style Surabaya di sisa baris
+                # Cari kalimat aksi penemuan di sisa baris teks bebas
                 action_remark = ""
                 for line in lines:
                     line_upper = line.upper()
@@ -93,10 +93,6 @@ if uploaded_file is not None:
                     remark_val = "Found/Resolved"
                 
                 remark_val = finding_no + remark_val + action_remark + additional_remark
-                
-                if loc_val == "-" and bin_val != "-":
-                    if "SUB" in bin_val.upper() or "SUB" in block: loc_val = "SUB"
-                    elif bin_val.startswith("BAT"): loc_val = "BAT"
 
                 if has_pn_vertical and pn_val != "-":
                     parsed_data.append({
@@ -104,7 +100,7 @@ if uploaded_file is not None:
                     })
                 
             else:
-                # --- FORMAT HORIZONTAL / BORONGAN JAKARTA STYLE (PN# , SN#) ---
+                # --- FORMAT HORIZONTAL / BORONGAN TEKS BEBAS ---
                 clean_block = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*[^:]+:\s*', '', block, flags=re.IGNORECASE)
                 clean_lines = clean_block.split("\n")
                 
@@ -114,23 +110,21 @@ if uploaded_file is not None:
                 for line in clean_lines:
                     line_upper = line.upper()
                     if any(k in line_upper for k in ["FOUND AT", "TRANSFER BIN", "TRANSFER TO"]):
-                        bin_match = re.search(r'\b([A-Za-z0-9]+-[A-Za-z0-9\-]+)\b', line)
+                        bin_match = re.search(r'\b([A-Za-z0-9\s]+-[A-Za-z0-9\s\-]+)\b', line)
                         if bin_match:
                             bin_global = bin_match.group(1).strip()
                             break
                 
-                # Saringan pembaca nama BIN horizontal ber-spasi (Membaca Cons 3, ROT FLOOR 1 secara lengkap)
                 if bin_global == "-":
                     for line in clean_lines:
-                        # Ditambahkan \b khusus agar kata DISPSL tidak memicu kecocokan kata 'DI'
                         bin_match = re.search(r'\b(?:BIN|FOUND AT|DI BIN)\s*#?\s*([A-Za-z0-9\s\-]{2,20})', line, re.IGNORECASE)
                         if bin_match:
                             potential_bin = bin_match.group(1).strip()
-                            # Buang jika yang tertangkap adalah kalimat status umum, bukan nama rak gudang
                             if not any(x in potential_bin.upper() for x in ["ACTUAL", "BIN", "FOUND", "OMITTED", "PLACED", "DISPSL"]):
                                 bin_global = potential_bin
                                 break
                             
+                # Ambil prefiks lokasi dari BIN horizontal jika menggunakan format strip (Misal BAT-TL291 -> BAT)
                 loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
                 
                 for line in reversed(clean_lines):
@@ -165,30 +159,19 @@ if uploaded_file is not None:
 
         df_filtered = df_raw[df_raw.apply(filter_strict_pembelaan, axis=1)]
         
-        # Pembersihan final untuk memastikan string sampah di kolom BIN diganti strip
+        # Pembersihan potongan string kotor di kolom BIN
         def clean_final_bins(val):
             v_upper = str(val).upper().strip()
-            # Bersihkan sisa kata kotor yang kepotong spasi
             if v_upper in ["A", "PLACED", "OMITTED", "MEDIA", "<MEDIA", "FOUND", "ACTUAL", "BIN", "ACTUAL BIN", "-"]:
                 return "-"
             return val
             
         df_filtered['BIN'] = df_filtered['BIN'].apply(clean_final_bins)
         
-        # Otomatis isi kolom Loc menjadi SUB jika nama rak gudang mengandung kata SUB
-        def auto_fill_sub_loc(row):
-            b_val = str(row['BIN']).upper()
-            l_val = str(row['Loc'])
-            if "SUB" in b_val:
-                return "SUB"
-            return l_val
-            
-        df_filtered['Loc'] = df_filtered.apply(auto_fill_sub_loc, axis=1)
-        
         # Rekonsiliasi data duplikat update chat (keep='last')
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sempurna! Bug BIN spasi (Cons 3, ROT FLOOR 1) dan pergeseran baris PN berhasil dibetulkan. Total: {len(df)} baris.")
+        st.success(f"🎉 Sukses! Kolom Loc berhasil dikunci murni sesuai ketikan asli WhatsApp. Total: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
@@ -199,7 +182,7 @@ if uploaded_file is not None:
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_pembelaan_multi_lokasi_fixed.xlsx",
+            file_name="rekap_pembelaan_asli_wa.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
