@@ -4,13 +4,13 @@ import re
 import io
 
 st.set_page_config(
-    page_title="WhatsApp Audit Extractor - Pure Text Mode",
+    page_title="WhatsApp Audit Extractor - Strict Pure Text Mode",
     page_icon="✈️",
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Murni Teks WhatsApp)")
-st.write("Versi Standar: Kolom Loc & BIN murni ditarik berdasarkan apa yang tertulis di dalam chat tanpa tebak-tebakan bandara.")
+st.title("✈️ WhatsApp Automated Audit Extractor (Murni Teks WhatsApp - Fixed)")
+st.write("Versi Steril Sempurna: Memperbaiki bug kolom BIN & Loc yang terseret kalimat 'TOOL FOUND AT BIN' pada format horizontal Batam.")
 
 st.divider()
 
@@ -57,7 +57,7 @@ if uploaded_file is not None:
                         val = parts[1].strip()
                         
                         if "LOC" in key: 
-                            loc_val = val # Murni mengambil apa yang diketik mekanik/storemen di WA
+                            loc_val = val 
                         elif "BIN EMRO" in key or "BIN ACTUAL" in key or "BIN ACT" in key: 
                             bin_val = val
                         elif "BIN" in key and bin_val == "-": 
@@ -110,9 +110,14 @@ if uploaded_file is not None:
                 for line in clean_lines:
                     line_upper = line.upper()
                     if any(k in line_upper for k in ["FOUND AT", "TRANSFER BIN", "TRANSFER TO"]):
+                        # PERBAIKAN 1: Cari kode BIN alfanumerik murni yang ber-strip (Contoh langsung ambil BAT-TL292)
                         bin_match = re.search(r'\b([A-Za-z0-9\s]+-[A-Za-z0-9\s\-]+)\b', line)
                         if bin_match:
-                            bin_global = bin_match.group(1).strip()
+                            raw_bin = bin_match.group(1).strip()
+                            # Buang sampah kalimat penunjuk jalan di depan kode aslinya jika ikut ketarik
+                            if "BIN " in raw_bin.upper():
+                                raw_bin = raw_bin.upper().split("BIN ")[-1].strip()
+                            bin_global = raw_bin
                             break
                 
                 if bin_global == "-":
@@ -124,6 +129,10 @@ if uploaded_file is not None:
                                 bin_global = potential_bin
                                 break
                             
+                # Bersihkan kolom BIN jika masih ketarik text 'TOOL FOUND AT' sebelum diolah kolom Loc-nya
+                if "FOUND AT " in bin_global.upper():
+                    bin_global = bin_global.upper().split("FOUND AT ")[-1].replace("BIN ", "").strip()
+                
                 # Ambil prefiks lokasi dari BIN horizontal jika menggunakan format strip (Misal BAT-TL291 -> BAT)
                 loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
                 
@@ -164,14 +173,26 @@ if uploaded_file is not None:
             v_upper = str(val).upper().strip()
             if v_upper in ["A", "PLACED", "OMITTED", "MEDIA", "<MEDIA", "FOUND", "ACTUAL", "BIN", "ACTUAL BIN", "-"]:
                 return "-"
+            if "BIN " in v_upper:
+                val = str(val).upper().split("BIN ")[-1].strip()
             return val
             
         df_filtered['BIN'] = df_filtered['BIN'].apply(clean_final_bins)
         
+        # Sinkronisasi ulang kolom Loc pasca-pembersihan BIN
+        def sync_clean_loc(row):
+            b_val = str(row['BIN'])
+            l_val = str(row['Loc'])
+            if "-" in b_val and l_val == "-":
+                return b_val.split("-")[0].strip()
+            return l_val
+
+        df_filtered['Loc'] = df_filtered.apply(sync_clean_loc, axis=1)
+        
         # Rekonsiliasi data duplikat update chat (keep='last')
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sukses! Kolom Loc berhasil dikunci murni sesuai ketikan asli WhatsApp. Total: {len(df)} baris.")
+        st.success(f"🎉 Sukses! Kolom BIN & Loc Batam berhasil dibersihkan total secara steril. Total: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
@@ -182,7 +203,7 @@ if uploaded_file is not None:
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_pembelaan_asli_wa.xlsx",
+            file_name="rekap_pembelaan_asli_wa_fixed.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
