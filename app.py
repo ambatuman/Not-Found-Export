@@ -4,17 +4,17 @@ import re
 import io
 
 st.set_page_config(
-    page_title="Indonesia Dynamic Audit Extractor",
+    page_title="WhatsApp Audit Extractor - Pure Found Engine",
     page_icon="✈️",
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Dynamic Classifier Engine)")
-st.write("Versi Pintar Skala Nasional (Fixed): Otomatis mengelompokkan temuan lapangan menjadi Found, Wrong Binning, Minus, Surplus, atau Still Not Found.")
+st.title("✈️ WhatsApp Automated Audit Extractor (Murni Pembelaan Found)")
+st.write("Versi Pembersihan Total: Hanya menarik barang hilang yang BERHASIL KETEMU (Found/Resolved). Mengabaikan total status Minus, Surplus, dan Still Not Found.")
 
 st.divider()
 
-uploaded_file = st.file_uploader("Upload file chat WhatsApp (.txt) station mana saja di sini:", type=["txt"])
+uploaded_file = st.file_uploader("Upload file chat WhatsApp (.txt) di sini:", type=["txt"])
 
 if uploaded_file is not None:
     stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
@@ -32,11 +32,10 @@ if uploaded_file is not None:
         block_lower = block.lower()
         lines = block.split("\n")
         
-        # Jaring semua chat yang mengandung unsur pencarian atau dispute SO
         has_substance = any(x in block_lower for x in ["pn", "pn#", "part", "sn", "sn#", "bin", "loc"])
-        is_audit_chat = any(x in block_lower for x in ["not found", "missing", "found", "minus", "surplus", "rts", "transfer", "actual"])
         
-        if has_substance and is_audit_chat:
+        # Jaring awal: Harus ada indikasi barang ketemu/found untuk pembelaan harian
+        if ("not found" in block_lower or "missing" in block_lower or "found" in block_lower) and has_substance:
             
             # --- DETEKSI FORMAT VERTIKAL / STRUCTURED FORM ---
             is_vertical_format = any(":" in line.strip() and not line.strip().startswith(tuple(str(i) for i in range(10))) for line in lines)
@@ -77,7 +76,7 @@ if uploaded_file is not None:
                         elif "REMARK" in key or "REMAKS" in key: 
                             remark_val = val
 
-                # Tangkap baris kalimat ketikan santai dari tim store di bawah format titik dua
+                # Tangkap baris kalimat respon storemen di bawah format utama
                 action_text_lines = []
                 for line in lines:
                     line_upper = line.upper()
@@ -93,7 +92,7 @@ if uploaded_file is not None:
                     remark_val = "NOT FOUND"
                 
                 if action_remark:
-                    remark_val = remark_val + " | Teks Lapangan: " + action_remark
+                    remark_val = remark_val + " | Respon: " + action_remark
                 
                 remark_val = finding_no + remark_val
 
@@ -173,36 +172,22 @@ if uploaded_file is not None:
             
         df_raw['BIN'] = df_raw['BIN'].apply(clean_final_bins)
         
-        # === BRAIN ENGINE: AUTOMATIC DISCREPANCY CLASSIFIER ===
-        def classify_audit_status(row):
+        # === FILTER ABSOLUT: HANYA LOLOSKAN BARANG YANG KETEMU (FOUND) ===
+        def filter_pure_found_only(row):
             rem = str(row['Remark']).upper()
             
-            # 1. Deteksi Klasifikasi WRONG BINNING / TRANSFER RAK
-            if any(word in rem for word in ["RTS", "TF", "TRANSFER", "PINDAH", "DI RCM", "DI CS", "REPAIR"]):
-                return "WRONG BINNING / TRANSFER"
+            # 1. Singkirkan total status sampah harian murni jika tidak ada pembelaan kata found/rts
+            if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]) and not "FOUND" in rem and not "RTS" in rem:
+                return False
                 
-            # 2. Deteksi Klasifikasi MINUS / PARTIAL FOUND
-            if "MINUS" in rem or "KURANG" in rem:
-                return "MINUS / PARTIAL FOUND"
-                
-            # 3. Deteksi Klasifikasi SURPLUS
-            if "SURPLUS" in rem or "LEBIH" in rem:
-                return "SURPLUS"
-                
-            # 4. Deteksi Klasifikasi FOUND / MATCH VALID
-            if any(w in rem for w in ["FOUND AT", "RESOLVED", "PENYELESAIAN", "FOUND ✅", "AKTUAL FOUND", "ACTUAL FOUND", "DIPAKAI USER", "TERPAKER", "MATCH"]):
-                return "FOUND / RESOLVED"
-                
-            # 5. Fallback: Jika murni tidak ada teks jawaban tambahan, berarti masih berstatus hilang
-            if "NOT FOUND" in rem or "MISSING" in rem:
-                # Perbaikan Typo: block_upper diubah ke rem agar aman dari NameError
-                if "TEKS LAPANGAN:" in rem and not any(x in rem for x in ["NOT FOUND", "MISSING"]):
-                    return "FOUND / RESOLVED"
-                return "STILL NOT FOUND"
-                
-            return "FOUND / RESOLVED"
+            # 2. Jika isi chatnya murni 'NOT FOUND' atau 'MINUS' kosongan tanpa ada bukti ketemunya, BUANG TELAK!
+            if "NOT FOUND" in rem or "MINUS" in rem:
+                if not any(word in rem for word in ["FOUND AT", "RESOLVED", "PENYELESAIAN", "RTS", "ISSUED", "AKTUAL FOUND", "ACTUAL FOUND", "DIPAKAI USER", "TERPAKER", "MATCH"]):
+                    return False
+                    
+            return True
 
-        df_raw['Status Audit'] = df_raw.apply(classify_audit_status, axis=1)
+        df_filtered = df_raw[df_raw.apply(filter_pure_found_only, axis=1)]
         
         # Sinkronisasi ulang kolom Loc pasca-pembersihan BIN
         def sync_clean_loc(row):
@@ -212,32 +197,23 @@ if uploaded_file is not None:
                 return b_val.split("-")[0].strip()
             return l_val
 
-        df_raw['Loc'] = df_raw.apply(sync_clean_loc, axis=1)
+        df_filtered['Loc'] = df_filtered.apply(sync_clean_loc, axis=1)
         
         # Rekonsiliasi data duplikat harian (keep='last')
-        df = df_raw.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
+        df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        # Reorder kolom agar rapi
-        cols = ['Loc', 'BIN', 'PN', 'SN', 'Quantity', 'Status Audit', 'Remark']
-        df = df[cols]
-        
-        st.success(f"🎉 Sempurna! Masalah NameError teratasi total. Total data masuk: {len(df)} baris.")
-        
-        st.markdown("### 📊 Ringkasan Status Hasil Audit Lapangan")
-        status_counts = df['Status Audit'].value_counts()
-        st.dataframe(status_counts, use_container_width=False)
-        
+        st.success(f"🎉 Sempurna! Aplikasi kembali steril murni hanya mengunci data FOUND. Total: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Audit_National_Summary')
+            df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
             
-        st.markdown("### 📥 Download File Master Rekap Indonesia")
+        st.markdown("### 📥 Download File Excel Gabungan")
         st.download_button(
-            label="📊 Download File Excel Multi-Status (.xlsx)",
+            label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_master_audit_nasional_summary.xlsx",
+            file_name="rekap_pembelaan_universal_perfect.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
