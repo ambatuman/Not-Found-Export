@@ -9,7 +9,7 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("⚡ WhatsApp Automated Audit Extractor (Anti-Chat Bocor)")
+st.title("⚡ WhatsApp Automated Audit Extractor (Anti-Chat Bocor - Fixed)")
 st.write("Versi Steril Sempurna: Menyingkirkan total chat obrolan koordinasi antar-personil dan murni hanya mengambil data barang.")
 
 st.divider()
@@ -109,8 +109,9 @@ if uploaded_file is not None:
                             
                 loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
                 
+                # FIX TYPO DI SINI (Mengubah x menjadi k agar loop any() berjalan normal)
                 for line in reversed(clean_lines):
-                    if any(k in line.upper() for x in ["FOUND", "TRANSFER", "ISSUED", "REMARK"]):
+                    if any(k in line.upper() for k in ["FOUND", "TRANSFER", "ISSUED", "REMARK"]):
                         remark_global = line.strip()
                         break
                 
