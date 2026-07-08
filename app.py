@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("✈️ WhatsApp Automated Audit Extractor (Multi-Location Engine)")
-st.write("Aplikasi pintar otomatis mendeteksi dan memproses format chat Stock Opname **Jakarta (K166)** maupun **Surabaya (SUB S1)**.")
+st.write("Versi Akurasi Tinggi: Menarik semua data penemuan baik yang berstatus NOT FOUND awal maupun yang langsung dilaporkan FOUND oleh tim lapangan.")
 
 st.divider()
 
@@ -32,10 +32,10 @@ if uploaded_file is not None:
         block_lower = block.lower()
         lines = block.split("\n")
         
-        # Saring ketat: Harus mengandung unsur dispute penemuan barang hilang (not found / missing)
-        if "not found" in block_lower or "missing" in block_lower:
+        # PERBAIKAN UTAMA: Saringan dilonggarkan agar status langsung "FOUND" murni ikut ketarik (Target 70+ Baris)
+        if "not found" in block_lower or "missing" in block_lower or "found" in block_lower:
             
-            # --- DETEKSI FORMAT VERTIKAL / RAFI / SUB S1 STYLE ---
+            # --- DETEKSI FORMAT VERTIKAL / SUB S1 STYLE ---
             is_vertical_format = any(":" in line.strip() and not line.strip().startswith(tuple(str(i) for i in range(10))) for line in lines)
             
             if is_vertical_format:
@@ -180,9 +180,7 @@ if uploaded_file is not None:
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_pembelaan_multi_lokasi.xlsx",
+            file_name="rekap_pembelaan_multi_lokasi_fixed.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
-    else:
-        st.warning("⚠️ Tidak terdeteksi data dispute temuan 'Not Found' yang valid di file ini.")
