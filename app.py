@@ -9,8 +9,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Pure Universal Engine)")
-st.write("Versi Steril Sempurna: Menghapus total jaring foto cadangan untuk membasmi duplikasi dan memastikan list komplain NOT FOUND tidak ikut bocor.")
+st.title("✈️ WhatsApp Automated Audit Extractor (Pure Universal Engine - Bug Fixed)")
+st.write("Versi Anti-Siluman: Membabat habis baris palsu akibat kalimat instruksi manual (seperti teks 'dan SN') secara total.")
 
 st.divider()
 
@@ -35,9 +35,7 @@ if uploaded_file is not None:
         # Seringkali auditor mengirim list komplain borongan, cek substansinya
         has_substance = any(x in block_lower for x in ["pn", "pn#", "part", "sn", "sn#", "bin", "loc"])
         
-        # -------------------------------------------------------------------------
-        # PENGASAHAN UTAMA: HANYA PROSES CHAT YANG PUNYA TEKS SUBSTANSI DATA BARANG
-        # -------------------------------------------------------------------------
+        # HANYA PROSES CHAT YANG PUNYA TEKS SUBSTANSI DATA BARANG
         if ("not found" in block_lower or "missing" in block_lower or "found" in block_lower) and has_substance:
             
             # --- DETEKSI FORMAT VERTIKAL / STRUCTURED FORM ---
@@ -82,7 +80,6 @@ if uploaded_file is not None:
                             if any(w in val.upper() for w in ["FOUND", "RESOLVED", "TRANSFER", "AKTUAL", "ACTUAL"]):
                                 has_explicit_resolution = True
 
-                # Cari baris penyelesaian eksternal (Contoh: PENYELESAIAN : Aktual found)
                 action_remark = ""
                 for line in lines:
                     line_upper = line.upper()
@@ -169,12 +166,17 @@ if uploaded_file is not None:
         # === FILTER MUTAKHIR: KUNCI MATI PEMBELAAN VALID ===
         def filter_strict_pembelaan(row):
             rem = str(row['Remark']).upper()
+            pn_upper = str(row['PN']).upper()
             
-            # 1. Singkirkan total data sampah harian
+            # PROTEKSI TERBARU: Buang baris silumen jika PN mengandung kalimat instruksi umum atau terlalu pendek palsu
+            if "DAN SN" in pn_upper or "CONTOH" in pn_upper or pn_upper in ["PN", "SN", "-"]:
+                return False
+                
+            # Singkirkan total data sampah harian
             if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]):
                 return False
                 
-            # 2. KUNCI UTAMA: Wajib berisi unsur aksi penemuan. Jika murni 'NOT FOUND' tanpa pembelaan, BUANG!
+            # Wajib berisi unsur aksi penemuan. Jika murni 'NOT FOUND' tanpa pembelaan, BUANG!
             valid_resolution_keywords = ["FOUND", "RESOLVED", "PENYELESAIAN", "TRANSFER", "RTS", "ISSUED", "AKTUAL", "ACTUAL"]
             if not any(word in rem for word in valid_resolution_keywords):
                 return False
@@ -207,7 +209,7 @@ if uploaded_file is not None:
         # Rekonsiliasi drop duplicates murni berdasarkan BIN, PN, dan SN
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sempurna! Aplikasi kembali ke Mode Universal Ter-Steril. Total data final bersih: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Baris siluman 'dan SN' berhasil dimusnahkan. Total data final steril: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
