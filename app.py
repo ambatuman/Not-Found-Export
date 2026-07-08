@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("✈️ WhatsApp Automated Audit Extractor (Universal Ultimate Engine)")
-st.write("Versi Super Lem: Mempertahankan 100% logika teks universal lama + Jaring Otomatis untuk stasiun yang hanya kirim foto kosongan.")
+st.write("Versi Stabil: Mempertahankan 100% logika teks universal lama dan membatasi jaring foto agar tidak merusak data borongan.")
 
 st.divider()
 
@@ -24,8 +24,6 @@ if uploaded_file is not None:
     message_blocks = re.split(r'(?=\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*)', chat_content)
     
     parsed_data = []
-    
-    # List bantuan untuk menampung riwayat komplain (Not Found / Missing) demi fitur backtrack foto
     complaint_history = []
     
     for block in message_blocks:
@@ -35,10 +33,13 @@ if uploaded_file is not None:
         block_lower = block.lower()
         lines = block.split("\n")
         
+        # Cek apakah balon chat ini mengandung teks data barang fisik
+        has_substance = any(x in block_lower for x in ["pn", "pn#", "part", "sn", "sn#", "bin", "loc"])
+        
         # -------------------------------------------------------------------------
         # ALUR 1: LOGIKA UNIVERSAL LAMA (TEKS JELAS & ADA KATA KUNCI PEMBELAAN)
         # -------------------------------------------------------------------------
-        if "not found" in block_lower or "missing" in block_lower or "found" in block_lower:
+        if ("not found" in block_lower or "missing" in block_lower or "found" in block_lower) and has_substance:
             
             # --- DETEKSI FORMAT VERTIKAL / STRUCTURED FORM ---
             is_vertical_format = any(":" in line.strip() and not line.strip().startswith(tuple(str(i) for i in range(10))) for line in lines)
@@ -100,8 +101,7 @@ if uploaded_file is not None:
                 if has_pn_vertical and pn_val != "-":
                     item = {"Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val}
                     parsed_data.append(item)
-                    # Catat ke history untuk cadangan backtrack jika statusnya komplain (bukan resolve murni harian)
-                    if "NOT FOUND" in block_upper or "MISSING" in block_upper:
+                    if "NOT FOUND" in remark_val.upper() or "MISSING" in remark_val.upper():
                         complaint_history.append(item)
                 
             else:
@@ -155,25 +155,28 @@ if uploaded_file is not None:
                             
                         item = {"Loc": loc_global, "BIN": bin_global, "PN": pn_match.group(1).strip() if pn_match else "-", "SN": sn_match.group(1).strip() if sn_match else "-", "Quantity": qty_val, "Remark": remark_global}
                         parsed_data.append(item)
-                        if "NOT FOUND" in block_lower or "missing" in block_lower:
+                        if "NOT FOUND" in remark_global.upper() or "MISSING" in remark_global.upper():
                             complaint_history.append(item)
 
         # -------------------------------------------------------------------------
-        # ALUR 2: LOGIKA EMERGENCY (STASIUN PARAH - BOM FOTO KOSONGAN TANPA TEKS)
+        # ALUR 2: LOGIKA EMERGENCY (UNTUK STASIUN YANG BENER-BENER MODAL FOTO KOSONGAN)
         # -------------------------------------------------------------------------
-        elif "<media omitted>" in block_lower and not any(k in block_lower for k in ["pn", "sn", "part"]):
-            # Jika ada riwayat komplain di atasnya, ambil data komplain terakhir sebagai target penemuan gambar ini
+        elif "<media omitted>" in block_lower and not has_substance:
+            # Jaring cadangan foto hanya aktif jika ada riwayat komplain NOT FOUND sebelumnya
             if complaint_history:
-                last_complaint = complaint_history[-1] # Ambil komplain terdekat di atasnya
+                last_complaint = complaint_history[-1]
+                # Pastikan item ini belum masuk dalam parsed_data dengan status foto untuk menghindari duplikasi liar
+                is_duplicate_photo = any(d["PN"] == last_complaint["PN"] and "Photo Evidence" in d["Remark"] for d in parsed_data)
                 
-                parsed_data.append({
-                    "Loc": last_complaint["Loc"],
-                    "BIN": last_complaint["BIN"],
-                    "PN": last_complaint["PN"],
-                    "SN": last_complaint["SN"],
-                    "Quantity": last_complaint["Quantity"],
-                    "Remark": f"Resolved via Photo Evidence (Automatic Timeline Radius Match) 📸"
-                })
+                if not is_duplicate_photo:
+                    parsed_data.append({
+                        "Loc": last_complaint["Loc"],
+                        "BIN": last_complaint["BIN"],
+                        "PN": last_complaint["PN"],
+                        "SN": last_complaint["SN"],
+                        "Quantity": last_complaint["Quantity"],
+                        "Remark": "Resolved via Photo Evidence (Automatic Radius Match) 📸"
+                    })
 
     if parsed_data:
         df_raw = pd.DataFrame(parsed_data)
@@ -209,20 +212,20 @@ if uploaded_file is not None:
         df_filtered['Loc'] = df_filtered.apply(sync_clean_loc, axis=1)
         
         # Rekonsiliasi data duplikat update chat (keep='last')
-        df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
+        df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN", "Remark"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sukses Besar! Kodingan Kompatibilitas Tinggi Berhasil Diluncurkan. Total data valid: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Proteksi duplikasi foto borongan berhasil diterapkan. Total data bersih: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
             
-        st.markdown("### 📥 Download File Excel Hasil Gabungan")
+        st.markdown("### 📥 Download File Excel Hasil Perbaikan")
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_pembelaan_ultimate_universal.xlsx",
+            file_name="rekap_pembelaan_ultimate_fixed.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
