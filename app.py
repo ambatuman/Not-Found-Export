@@ -9,8 +9,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Pure Universal Engine - Bug Fixed)")
-st.write("Versi Anti-Siluman: Membabat habis baris palsu akibat kalimat instruksi manual (seperti teks 'dan SN') secara total.")
+st.title("✈️ WhatsApp Automated Audit Extractor (All Stations - KNO Strict Mode)")
+st.write("Versi Proteksi KNO: Kebal dari jebakan kata 'QTY ACTUAL' pada format komplain harian. Murni hanya menarik pembelaan valid.")
 
 st.divider()
 
@@ -32,10 +32,8 @@ if uploaded_file is not None:
         block_lower = block.lower()
         lines = block.split("\n")
         
-        # Seringkali auditor mengirim list komplain borongan, cek substansinya
         has_substance = any(x in block_lower for x in ["pn", "pn#", "part", "sn", "sn#", "bin", "loc"])
         
-        # HANYA PROSES CHAT YANG PUNYA TEKS SUBSTANSI DATA BARANG
         if ("not found" in block_lower or "missing" in block_lower or "found" in block_lower) and has_substance:
             
             # --- DETEKSI FORMAT VERTIKAL / STRUCTURED FORM ---
@@ -45,7 +43,6 @@ if uploaded_file is not None:
                 loc_val, bin_val, pn_val, sn_val, qty_val, remark_val = "-", "-", "-", "-", 1, "-"
                 additional_remark = ""
                 has_pn_vertical = False
-                has_explicit_resolution = False
                 
                 finding_no = ""
                 find_match = re.search(r'(?:Finding No|No Finding|No\.)\s*(\d+)', block, re.IGNORECASE)
@@ -77,14 +74,12 @@ if uploaded_file is not None:
                             if qty_match: qty_val = int(qty_match.group(1))
                         elif "REMARK" in key or "REMAKS" in key: 
                             remark_val = val
-                            if any(w in val.upper() for w in ["FOUND", "RESOLVED", "TRANSFER", "AKTUAL", "ACTUAL"]):
-                                has_explicit_resolution = True
 
+                # Cari baris penyelesaian eksternal di sisa baris chat
                 action_remark = ""
                 for line in lines:
                     line_upper = line.upper()
                     if any(k in line_upper for k in ["FOUND AT", "TRANSFER BIN", "DONE", "RTS", "PENYELESAIAN", "AKTUAL FOUND", "ACTUAL FOUND"]):
-                        has_explicit_resolution = True
                         if ":" not in line or "PENYELESAIAN" in line_upper:
                             action_remark = " " + line.strip()
                             break
@@ -98,9 +93,10 @@ if uploaded_file is not None:
                     remark_val = "NOT FOUND"
                 
                 if action_remark or additional_remark:
-                    remark_val = finding_no + remark_val + action_remark + additional_remark
-                else:
-                    remark_val = finding_no + remark_val
+                    remark_val = remark_val + action_remark + additional_remark
+                
+                # Tempel finding_no di depan jika ada
+                remark_val = finding_no + remark_val
 
                 if has_pn_vertical and pn_val != "-":
                     parsed_data.append({
@@ -163,23 +159,21 @@ if uploaded_file is not None:
     if parsed_data:
         df_raw = pd.DataFrame(parsed_data)
         
-        # === FILTER MUTAKHIR: KUNCI MATI PEMBELAAN VALID ===
+        # === FILTER MODAL UTAMA: ANTI-JEBAKAN KATA ACTUAL KOSONGAN ===
         def filter_strict_pembelaan(row):
             rem = str(row['Remark']).upper()
             pn_upper = str(row['PN']).upper()
             
-            # PROTEKSI TERBARU: Buang baris silumen jika PN mengandung kalimat instruksi umum atau terlalu pendek palsu
             if "DAN SN" in pn_upper or "CONTOH" in pn_upper or pn_upper in ["PN", "SN", "-"]:
                 return False
                 
-            # Singkirkan total data sampah harian
-            if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]):
+            if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]) and not "FOUND" in rem and not "RTS" in rem:
                 return False
                 
-            # Wajib berisi unsur aksi penemuan. Jika murni 'NOT FOUND' tanpa pembelaan, BUANG!
-            valid_resolution_keywords = ["FOUND", "RESOLVED", "PENYELESAIAN", "TRANSFER", "RTS", "ISSUED", "AKTUAL", "ACTUAL"]
-            if not any(word in rem for word in valid_resolution_keywords):
-                return False
+            # JIKA REMARK MASIH BERISI NOT FOUND/MINUS TANPA ADA KATA FOUND/RTS/PENYELESAIAN NYATA, MAKA BUANG!
+            if "NOT FOUND" in rem or "MINUS" in rem:
+                if not any(word in rem for word in ["FOUND AT", "RESOLVED", "PENYELESAIAN", "RTS", "ISSUED", "AKTUAL FOUND", "ACTUAL FOUND"]):
+                    return False
                 
             return True
 
@@ -209,14 +203,14 @@ if uploaded_file is not None:
         # Rekonsiliasi drop duplicates murni berdasarkan BIN, PN, dan SN
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sempurna! Baris siluman 'dan SN' berhasil dimusnahkan. Total data final steril: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Masalah filter komplain 'QTY ACTUAL' KNO teratasi. Total data final steril: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
             
-        st.markdown("### 📥 Download File Excel Super Steril")
+        st.markdown("### 📥 Download File Excel Hasil Perbaikan")
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
