@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("✈️ WhatsApp Automated Audit Extractor (Multi-Location Engine)")
-st.write("Versi Akurasi Tinggi & Super Steril: Dijamin bersih total tanpa bocor dari data Unrecorded, Wrong Binning, Surplus, maupun Minus.")
+st.write("Versi Pembaruan: Memperbaiki akurasi penarikan Part Number yang mengandung tanda titik (.) seperti kode J.3/8LA.")
 
 st.divider()
 
@@ -63,7 +63,9 @@ if uploaded_file is not None:
                         elif "BIN" in key and bin_val == "-": 
                             bin_val = val
                         elif "P/N" in key or "PN" in key or "PART NUMBER" in key: 
-                            pn_val = val
+                            # PERBAIKAN 1: Ekstraksi format vertikal agar kebal tanda titik (.)
+                            pn_clean_match = re.search(r'([A-Za-z0-9\-/.]+)', val)
+                            pn_val = pn_clean_match.group(1).strip() if pn_clean_match else val
                             if val != "-" and val != "":
                                 has_pn_vertical = True
                         elif "SN" in key: 
@@ -139,7 +141,8 @@ if uploaded_file is not None:
                 
                 for line in clean_lines:
                     if any(x in line.upper() for x in ["PN#", "PN ", "PART NUMBER"]):
-                        pn_match = re.search(r'(?:PN#|PN|Part\s*Number)[:\s-]*([A-Za-z0-9\-/]+)', line, re.IGNORECASE)
+                        # PERBAIKAN 2: Regex horizontal ditambahkan titik ([A-Za-z0-9\-/.]+) agar J.3/8LA terbaca utuh
+                        pn_match = re.search(r'(?:PN#|PN|Part\s*Number)[:\s-]*([A-Za-z0-9\-/.]+)', line, re.IGNORECASE)
                         sn_match = re.search(r'(?:SN#|SN|Serial|S/N)[:\s-]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
                         qty_match = re.search(r'(?:QTY#|QTY)[:\s-]*(\d+)|(\d+)\s*(?:pcs|qty|item)', line, re.IGNORECASE)
                         
@@ -155,12 +158,11 @@ if uploaded_file is not None:
     if parsed_data:
         df_raw = pd.DataFrame(parsed_data)
         
-        # === PERBAIKAN MUTAKHIR: KUNCI MASALAH SURPLUS / UNRECORDED ===
-        # Fungsi filter ketat: Jika di dalam Remark mengandung kata kunci sampah, langsung BUANG tanpa pengecualian kata penyelamat!
+        # Tameng filter surplus / minus harian murni tanpa status pencarian barang
         def filter_strict_pembelaan(row):
             rem = str(row['Remark']).upper()
             if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]):
-                return False # Tolak telak, coret dari Excel!
+                return False
             return True
 
         df_filtered = df_raw[df_raw.apply(filter_strict_pembelaan, axis=1)]
@@ -168,18 +170,8 @@ if uploaded_file is not None:
         # Rekonsiliasi data duplikat update chat (keep='last')
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sempurna! Data murni Unrecorded & Wrong Binning berhasil dibasmi. Total data final valid: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Kode Part Number bertanda titik berhasil diperbaiki. Total data final valid: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
-            
-        st.markdown("### 📥 Download File Excel Gabungan")
-        st.download_button(
-            label="📊 Download File Excel (.xlsx)",
-            data=buffer.getvalue(),
-            file_name="rekap_pembelaan_multi_lokasi_fixed.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
+        with pd.ExcelWriter(buffer, engine='openpyxl') as writer
