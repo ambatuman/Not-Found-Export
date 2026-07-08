@@ -9,8 +9,8 @@ st.set_page_config(
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Multi-Location - BIN Fixed)")
-st.write("Versi Steril Sempurna: Memperbaiki bug kolom BIN yang terisi huruf 'a' atau 'placed' akibat teks bawaan media WhatsApp.")
+st.title("✈️ WhatsApp Automated Audit Extractor (Multi-Location - Ultimate Fixed)")
+st.write("Versi Sempurna: Memperbaiki bug nama BIN ber-spasi (Cons 3, ROT FLOOR 1), membersihkan BIN 'actual', dan memperbaiki pergeseran baris data PN.")
 
 st.divider()
 
@@ -63,8 +63,7 @@ if uploaded_file is not None:
                         elif "BIN" in key and bin_val == "-": 
                             bin_val = val
                         elif "P/N" in key or "PN" in key or "PART NUMBER" in key: 
-                            # Ekstraksi format vertikal agar kebal tanda titik (.)
-                            pn_clean_match = re.search(r'([A-Za-z0-9\-/.]+)', val)
+                            pn_clean_match = re.search(r'([A-Za-z0-9\-/.\s]+)', val)
                             pn_val = pn_clean_match.group(1).strip() if pn_clean_match else val
                             if val != "-" and val != "":
                                 has_pn_vertical = True
@@ -93,17 +92,12 @@ if uploaded_file is not None:
                 if remark_val == "-" or remark_val == "": 
                     remark_val = "Found/Resolved"
                 
-                # Gabungkan remark biar informatif lengkap
                 remark_val = finding_no + remark_val + action_remark + additional_remark
                 
-                # Jika di format Surabaya lokasinya tidak tertulis eksplisit, auto-fill pakai 'SUB' berdasarkan nama BIN
                 if loc_val == "-" and bin_val != "-":
-                    if "SUB" in bin_val.upper() or "SUB" in block:
-                        loc_val = "SUB"
-                    elif bin_val.startswith("BAT"):
-                        loc_val = "BAT"
+                    if "SUB" in bin_val.upper() or "SUB" in block: loc_val = "SUB"
+                    elif bin_val.startswith("BAT"): loc_val = "BAT"
 
-                # Masukkan data jika lolos validasi PN
                 if has_pn_vertical and pn_val != "-":
                     parsed_data.append({
                         "Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val
@@ -119,19 +113,23 @@ if uploaded_file is not None:
                 
                 for line in clean_lines:
                     line_upper = line.upper()
-                    if any(k in line_upper for k in ["BIN", "FOUND AT", "TRANSFER"]):
+                    if any(k in line_upper for k in ["FOUND AT", "TRANSFER BIN", "TRANSFER TO"]):
                         bin_match = re.search(r'\b([A-Za-z0-9]+-[A-Za-z0-9\-]+)\b', line)
                         if bin_match:
                             bin_global = bin_match.group(1).strip()
                             break
                 
+                # Saringan pembaca nama BIN horizontal ber-spasi (Membaca Cons 3, ROT FLOOR 1 secara lengkap)
                 if bin_global == "-":
                     for line in clean_lines:
-                        # Ditambahkan \b (word boundary) agar tidak salah tangkap huruf 'DI' di dalam kata 'omitted'
-                        bin_match = re.search(r'\b(?:BIN|AT|DI)\s*#?\s*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
-                        if bin_match and bin_match.group(1).upper() not in ["BIN", "AT", "DI", "FOUND", "OMITTED"]:
-                            bin_global = bin_match.group(1).strip()
-                            break
+                        # Ditambahkan \b khusus agar kata DISPSL tidak memicu kecocokan kata 'DI'
+                        bin_match = re.search(r'\b(?:BIN|FOUND AT|DI BIN)\s*#?\s*([A-Za-z0-9\s\-]{2,20})', line, re.IGNORECASE)
+                        if bin_match:
+                            potential_bin = bin_match.group(1).strip()
+                            # Buang jika yang tertangkap adalah kalimat status umum, bukan nama rak gudang
+                            if not any(x in potential_bin.upper() for x in ["ACTUAL", "BIN", "FOUND", "OMITTED", "PLACED", "DISPSL"]):
+                                bin_global = potential_bin
+                                break
                             
                 loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
                 
@@ -142,7 +140,6 @@ if uploaded_file is not None:
                 
                 for line in clean_lines:
                     if any(x in line.upper() for x in ["PN#", "PN ", "PART NUMBER"]):
-                        # Regex horizontal ditambahkan titik ([A-Za-z0-9\-/.]+) agar J.3/8LA terbaca utuh
                         pn_match = re.search(r'(?:PN#|PN|Part\s*Number)[:\s-]*([A-Za-z0-9\-/.\s]+)', line, re.IGNORECASE)
                         sn_match = re.search(r'(?:SN#|SN|Serial|S/N)[:\s-]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
                         qty_match = re.search(r'(?:QTY#|QTY)[:\s-]*(\d+)|(\d+)\s*(?:pcs|qty|item)', line, re.IGNORECASE)
@@ -168,27 +165,37 @@ if uploaded_file is not None:
 
         df_filtered = df_raw[df_raw.apply(filter_strict_pembelaan, axis=1)]
         
-        # === SOLUSI UTAMA PERBAIKAN BIN SILUMAN ===
-        # Bersihkan jika ada nilai BIN yang tidak valid hasil tarikan fallback liar
-        def clean_bad_bins(val):
+        # Pembersihan final untuk memastikan string sampah di kolom BIN diganti strip
+        def clean_final_bins(val):
             v_upper = str(val).upper().strip()
-            if v_upper in ["A", "PLACED", "OMITTED", "MEDIA", "<MEDIA", "FOUND", "-"]:
+            # Bersihkan sisa kata kotor yang kepotong spasi
+            if v_upper in ["A", "PLACED", "OMITTED", "MEDIA", "<MEDIA", "FOUND", "ACTUAL", "BIN", "ACTUAL BIN", "-"]:
                 return "-"
             return val
             
-        df_filtered['BIN'] = df_filtered['BIN'].apply(clean_bad_bins)
+        df_filtered['BIN'] = df_filtered['BIN'].apply(clean_final_bins)
+        
+        # Otomatis isi kolom Loc menjadi SUB jika nama rak gudang mengandung kata SUB
+        def auto_fill_sub_loc(row):
+            b_val = str(row['BIN']).upper()
+            l_val = str(row['Loc'])
+            if "SUB" in b_val:
+                return "SUB"
+            return l_val
+            
+        df_filtered['Loc'] = df_filtered.apply(auto_fill_sub_loc, axis=1)
         
         # Rekonsiliasi data duplikat update chat (keep='last')
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sempurna! Kolom BIN palsu ('a'/'placed') berhasil dibersihkan menjadi '-'. Total data final valid: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Bug BIN spasi (Cons 3, ROT FLOOR 1) dan pergeseran baris PN berhasil dibetulkan. Total: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
             
-        st.markdown("### 📥 Download File Excel Gabungan")
+        st.markdown("### 📥 Download File Excel Hasil Perbaikan")
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
