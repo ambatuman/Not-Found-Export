@@ -4,13 +4,13 @@ import re
 import io
 
 st.set_page_config(
-    page_title="WhatsApp Audit Extractor - Universal Ultimate Engine",
+    page_title="WhatsApp Audit Extractor - Pure Universal Engine",
     page_icon="✈️",
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Universal Ultimate Engine)")
-st.write("Versi Stabil: Mempertahankan 100% logika teks universal lama dan membatasi jaring foto agar tidak merusak data borongan.")
+st.title("✈️ WhatsApp Automated Audit Extractor (Pure Universal Engine)")
+st.write("Versi Steril Sempurna: Menghapus total jaring foto cadangan untuk membasmi duplikasi dan memastikan list komplain NOT FOUND tidak ikut bocor.")
 
 st.divider()
 
@@ -24,7 +24,6 @@ if uploaded_file is not None:
     message_blocks = re.split(r'(?=\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*)', chat_content)
     
     parsed_data = []
-    complaint_history = []
     
     for block in message_blocks:
         if not block.strip():
@@ -33,11 +32,11 @@ if uploaded_file is not None:
         block_lower = block.lower()
         lines = block.split("\n")
         
-        # Cek apakah balon chat ini mengandung teks data barang fisik
+        # Seringkali auditor mengirim list komplain borongan, cek substansinya
         has_substance = any(x in block_lower for x in ["pn", "pn#", "part", "sn", "sn#", "bin", "loc"])
         
         # -------------------------------------------------------------------------
-        # ALUR 1: LOGIKA UNIVERSAL LAMA (TEKS JELAS & ADA KATA KUNCI PEMBELAAN)
+        # PENGASAHAN UTAMA: HANYA PROSES CHAT YANG PUNYA TEKS SUBSTANSI DATA BARANG
         # -------------------------------------------------------------------------
         if ("not found" in block_lower or "missing" in block_lower or "found" in block_lower) and has_substance:
             
@@ -48,6 +47,7 @@ if uploaded_file is not None:
                 loc_val, bin_val, pn_val, sn_val, qty_val, remark_val = "-", "-", "-", "-", 1, "-"
                 additional_remark = ""
                 has_pn_vertical = False
+                has_explicit_resolution = False
                 
                 finding_no = ""
                 find_match = re.search(r'(?:Finding No|No Finding|No\.)\s*(\d+)', block, re.IGNORECASE)
@@ -77,14 +77,18 @@ if uploaded_file is not None:
                         elif "QTY ACT" in key or "QTY ACTUAL" in key or "QTY" in key:
                             qty_match = re.search(r'(\d+)', val)
                             if qty_match: qty_val = int(qty_match.group(1))
-                        elif "REMARK" in key: 
+                        elif "REMARK" in key or "REMAKS" in key: 
                             remark_val = val
+                            if any(w in val.upper() for w in ["FOUND", "RESOLVED", "TRANSFER", "AKTUAL", "ACTUAL"]):
+                                has_explicit_resolution = True
 
+                # Cari baris penyelesaian eksternal (Contoh: PENYELESAIAN : Aktual found)
                 action_remark = ""
                 for line in lines:
                     line_upper = line.upper()
-                    if any(k in line_upper for k in ["FOUND AT", "TRANSFER BIN", "DONE", "RTS"]):
-                        if ":" not in line:
+                    if any(k in line_upper for k in ["FOUND AT", "TRANSFER BIN", "DONE", "RTS", "PENYELESAIAN", "AKTUAL FOUND", "ACTUAL FOUND"]):
+                        has_explicit_resolution = True
+                        if ":" not in line or "PENYELESAIAN" in line_upper:
                             action_remark = " " + line.strip()
                             break
 
@@ -94,15 +98,17 @@ if uploaded_file is not None:
                         break
                 
                 if remark_val == "-" or remark_val == "": 
-                    remark_val = "Found/Resolved"
+                    remark_val = "NOT FOUND"
                 
-                remark_val = finding_no + remark_val + action_remark + additional_remark
+                if action_remark or additional_remark:
+                    remark_val = finding_no + remark_val + action_remark + additional_remark
+                else:
+                    remark_val = finding_no + remark_val
 
                 if has_pn_vertical and pn_val != "-":
-                    item = {"Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val}
-                    parsed_data.append(item)
-                    if "NOT FOUND" in remark_val.upper() or "MISSING" in remark_val.upper():
-                        complaint_history.append(item)
+                    parsed_data.append({
+                        "Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val
+                    })
                 
             else:
                 # --- FORMAT HORIZONTAL / BORONGAN TEKS BEBAS ---
@@ -153,39 +159,26 @@ if uploaded_file is not None:
                         else:
                             qty_val = 1
                             
-                        item = {"Loc": loc_global, "BIN": bin_global, "PN": pn_match.group(1).strip() if pn_match else "-", "SN": sn_match.group(1).strip() if sn_match else "-", "Quantity": qty_val, "Remark": remark_global}
-                        parsed_data.append(item)
-                        if "NOT FOUND" in remark_global.upper() or "MISSING" in remark_global.upper():
-                            complaint_history.append(item)
-
-        # -------------------------------------------------------------------------
-        # ALUR 2: LOGIKA EMERGENCY (UNTUK STASIUN YANG BENER-BENER MODAL FOTO KOSONGAN)
-        # -------------------------------------------------------------------------
-        elif "<media omitted>" in block_lower and not has_substance:
-            # Jaring cadangan foto hanya aktif jika ada riwayat komplain NOT FOUND sebelumnya
-            if complaint_history:
-                last_complaint = complaint_history[-1]
-                # Pastikan item ini belum masuk dalam parsed_data dengan status foto untuk menghindari duplikasi liar
-                is_duplicate_photo = any(d["PN"] == last_complaint["PN"] and "Photo Evidence" in d["Remark"] for d in parsed_data)
-                
-                if not is_duplicate_photo:
-                    parsed_data.append({
-                        "Loc": last_complaint["Loc"],
-                        "BIN": last_complaint["BIN"],
-                        "PN": last_complaint["PN"],
-                        "SN": last_complaint["SN"],
-                        "Quantity": last_complaint["Quantity"],
-                        "Remark": "Resolved via Photo Evidence (Automatic Radius Match) 📸"
-                    })
+                        parsed_data.append({
+                            "Loc": loc_global, "BIN": bin_global, "PN": pn_match.group(1).strip() if pn_match else "-", "SN": sn_match.group(1).strip() if sn_match else "-", "Quantity": qty_val, "Remark": remark_global
+                        })
 
     if parsed_data:
         df_raw = pd.DataFrame(parsed_data)
         
-        # Tameng filter surplus / minus harian murni tanpa status pencarian barang
+        # === FILTER MUTAKHIR: KUNCI MATI PEMBELAAN VALID ===
         def filter_strict_pembelaan(row):
             rem = str(row['Remark']).upper()
-            if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]) and "PHOTO" not in rem:
+            
+            # 1. Singkirkan total data sampah harian
+            if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]):
                 return False
+                
+            # 2. KUNCI UTAMA: Wajib berisi unsur aksi penemuan. Jika murni 'NOT FOUND' tanpa pembelaan, BUANG!
+            valid_resolution_keywords = ["FOUND", "RESOLVED", "PENYELESAIAN", "TRANSFER", "RTS", "ISSUED", "AKTUAL", "ACTUAL"]
+            if not any(word in rem for word in valid_resolution_keywords):
+                return False
+                
             return True
 
         df_filtered = df_raw[df_raw.apply(filter_strict_pembelaan, axis=1)]
@@ -211,21 +204,21 @@ if uploaded_file is not None:
 
         df_filtered['Loc'] = df_filtered.apply(sync_clean_loc, axis=1)
         
-        # Rekonsiliasi data duplikat update chat (keep='last')
-        df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN", "Remark"], keep="last").reset_index(drop=True)
+        # Rekonsiliasi drop duplicates murni berdasarkan BIN, PN, dan SN
+        df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sempurna! Proteksi duplikasi foto borongan berhasil diterapkan. Total data bersih: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Aplikasi kembali ke Mode Universal Ter-Steril. Total data final bersih: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
             
-        st.markdown("### 📥 Download File Excel Hasil Perbaikan")
+        st.markdown("### 📥 Download File Excel Super Steril")
         st.download_button(
             label="📊 Download File Excel (.xlsx)",
             data=buffer.getvalue(),
-            file_name="rekap_pembelaan_ultimate_fixed.xlsx",
+            file_name="rekap_pembelaan_universal_perfect.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
