@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("✈️ WhatsApp Automated Audit Extractor (Multi-Location Engine)")
-st.write("Versi Akurasi Tinggi: Menarik semua data penemuan baik yang berstatus NOT FOUND awal maupun yang langsung dilaporkan FOUND oleh tim lapangan.")
+st.write("Versi Akurasi Tinggi & Super Steril: Dijamin bersih total tanpa bocor dari data Unrecorded, Wrong Binning, Surplus, maupun Minus.")
 
 st.divider()
 
@@ -32,7 +32,7 @@ if uploaded_file is not None:
         block_lower = block.lower()
         lines = block.split("\n")
         
-        # PERBAIKAN UTAMA: Saringan dilonggarkan agar status langsung "FOUND" murni ikut ketarik (Target 70+ Baris)
+        # Saring awal: Harus mengandung unsur dispute penemuan barang (not found / missing / found)
         if "not found" in block_lower or "missing" in block_lower or "found" in block_lower:
             
             # --- DETEKSI FORMAT VERTIKAL / SUB S1 STYLE ---
@@ -155,13 +155,12 @@ if uploaded_file is not None:
     if parsed_data:
         df_raw = pd.DataFrame(parsed_data)
         
-        # Tameng filter surplus / minus harian murni tanpa status pencarian barang
+        # === PERBAIKAN MUTAKHIR: KUNCI MASALAH SURPLUS / UNRECORDED ===
+        # Fungsi filter ketat: Jika di dalam Remark mengandung kata kunci sampah, langsung BUANG tanpa pengecualian kata penyelamat!
         def filter_strict_pembelaan(row):
             rem = str(row['Remark']).upper()
             if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]):
-                if any(save in rem for save in ["FOUND", "TRANSFER", "ISSUED", "MISSING", "NOT FOUND", "RESOLVED"]):
-                    return True
-                return False
+                return False # Tolak telak, coret dari Excel!
             return True
 
         df_filtered = df_raw[df_raw.apply(filter_strict_pembelaan, axis=1)]
@@ -169,7 +168,7 @@ if uploaded_file is not None:
         # Rekonsiliasi data duplikat update chat (keep='last')
         df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        st.success(f"🎉 Sukses Besar! Sistem Multi-Lokasi berhasil memproses data chat. Total data final valid: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Data murni Unrecorded & Wrong Binning berhasil dibasmi. Total data final valid: {len(df)} baris.")
         st.dataframe(df, use_container_width=True)
         
         buffer = io.BytesIO()
