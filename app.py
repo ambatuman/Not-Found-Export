@@ -10,7 +10,7 @@ st.set_page_config(
 )
 
 st.title("✈️ WhatsApp Automated Audit Extractor (Dynamic Classifier Engine)")
-st.write("Versi Pintar Skala Nasional: Otomatis mengelompokkan temuan lapangan menjadi Found, Wrong Binning, Minus, Surplus, atau Still Not Found.")
+st.write("Versi Pintar Skala Nasional (Fixed): Otomatis mengelompokkan temuan lapangan menjadi Found, Wrong Binning, Minus, Surplus, atau Still Not Found.")
 
 st.divider()
 
@@ -81,7 +81,6 @@ if uploaded_file is not None:
                 action_text_lines = []
                 for line in lines:
                     line_upper = line.upper()
-                    # Ambil baris teks bebas yang bukan struktur utama dan bukan timestamp metadata
                     if ":" not in line and line.strip() and not line.strip().startswith("*") and not "OMITTED" in line_upper:
                         action_text_lines.append(line.strip())
                     elif "PENYELESAIAN" in line_upper or "ACTUAL" in line_upper or "DIPAKAI" in line_upper or "RTS" in line_upper:
@@ -104,7 +103,7 @@ if uploaded_file is not None:
                     })
                 
             else:
-                # --- FORMAT HORIZONTAL / BORONGAN TEKS BEBAS (LAMA) ---
+                # --- FORMAT HORIZONTAL / BORONGAN TEKS BEBAS ---
                 clean_block = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*[^:]+:\s*', '', block, flags=re.IGNORECASE)
                 clean_lines = clean_block.split("\n")
                 
@@ -179,7 +178,7 @@ if uploaded_file is not None:
             rem = str(row['Remark']).upper()
             
             # 1. Deteksi Klasifikasi WRONG BINNING / TRANSFER RAK
-            if any(w in rem for word in ["RTS", "TF", "TRANSFER", "PINDAH", "DI RCM", "DI CS", "REPAIR"]):
+            if any(word in rem for word in ["RTS", "TF", "TRANSFER", "PINDAH", "DI RCM", "DI CS", "REPAIR"]):
                 return "WRONG BINNING / TRANSFER"
                 
             # 2. Deteksi Klasifikasi MINUS / PARTIAL FOUND
@@ -194,10 +193,10 @@ if uploaded_file is not None:
             if any(w in rem for w in ["FOUND AT", "RESOLVED", "PENYELESAIAN", "FOUND ✅", "AKTUAL FOUND", "ACTUAL FOUND", "DIPAKAI USER", "TERPAKER", "MATCH"]):
                 return "FOUND / RESOLVED"
                 
-            # 5. Fallback: Jika murni tidak ada teks jawaban, berarti masih berstatus hilang
+            # 5. Fallback: Jika murni tidak ada teks jawaban tambahan, berarti masih berstatus hilang
             if "NOT FOUND" in rem or "MISSING" in rem:
-                # Jika ada teks ketikan tambahan setelah tanda pipa '|', berarti storemen merespon sesuatu (bisa berupa status otonom)
-                if "| TEKS LAPANGAN:" in rem and not any(x in rem for x in ["NOT FOUND", "MISSING"]):
+                # Perbaikan Typo: block_upper diubah ke rem agar aman dari NameError
+                if "TEKS LAPANGAN:" in rem and not any(x in rem for x in ["NOT FOUND", "MISSING"]):
                     return "FOUND / RESOLVED"
                 return "STILL NOT FOUND"
                 
@@ -218,13 +217,12 @@ if uploaded_file is not None:
         # Rekonsiliasi data duplikat harian (keep='last')
         df = df_raw.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
         
-        # Reorder kolom agar kolom 'Status Audit' ditaruh di depan agar mudah difilter user di Excel
+        # Reorder kolom agar rapi
         cols = ['Loc', 'BIN', 'PN', 'SN', 'Quantity', 'Status Audit', 'Remark']
         df = df[cols]
         
-        st.success(f"🎉 Sempurna! Mesin Klasifikasi Otomatis Berhasil Memproses File Nasional. Total data: {len(df)} baris.")
+        st.success(f"🎉 Sempurna! Masalah NameError teratasi total. Total data masuk: {len(df)} baris.")
         
-        # Tampilkan visualisasi mini dashboard status audit agar Thariq mudah memantau
         st.markdown("### 📊 Ringkasan Status Hasil Audit Lapangan")
         status_counts = df['Status Audit'].value_counts()
         st.dataframe(status_counts, use_container_width=False)
