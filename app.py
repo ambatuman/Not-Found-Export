@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("📊 WhatsApp Audit Reconciler (Pure Precision Engine)")
-st.write("Versi Pembersihan Mutlak: Hanya memproses tab Worksheet utama dan memblokir tab cadangan lama secara total.")
+st.write("Versi Pembersihan Mutlak: Hanya memproses tab Worksheet utama dan menyaring murni kalimat pembelaan/solusi.")
 
 st.divider()
 
@@ -69,10 +69,11 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     wa_combo_evidence = {}
     total_chat_in_range = 0
     
+    # KATA KUNCI VALID: Menghapus total kata 'not completed' agar chat komplain murni tidak lolos
     keywords_valid_solusi = [
         "found", "rts", "match", "issued", "transfer", "pindah", 
         "done", "solved", "terpasang", "di rcm", "di cs", "bagus", "✅",
-        "complete", "complited", "penyelsayan", "penyelsian", "not completed"
+        "complete", "complited", "penyelsayan", "penyelsian"
     ]
     
     for block in message_blocks:
@@ -98,7 +99,23 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                 
                 text_lower = clean_text.lower()
                 
-                if not (any(k in text_lower for k in keywords_valid_solusi) or re.search(r'PENYEL[E]*SAIAN', text_lower)):
+                # Cek kevalidan: Harus punya keyword solusi dan BUKAN murni komplain template ("remark : not completed")
+                has_solusi = any(k in text_lower for k in keywords_valid_solusi)
+                has_penyelesaian = bool(re.search(r'PENYEL[E]*SAIAN', text_lower))
+                
+                # Jika chat murni template komplain tanpa ada tindak lanjut solusi nyata, buang!
+                if not (has_solusi or has_penyelesaian):
+                    continue
+                    
+                # Validasi tambahan: jika isi chat setelah dibuang metadatanya hanya berisi template komplain, coret.
+                lines_check = [l.upper().strip() for l in clean_text.split('\n') if l.strip()]
+                is_pure_report = True
+                for line in lines_check:
+                    # Jika ada baris tulisan bebas yang bukan template report dasar, berarti ada chat tambahan info
+                    if not any(hdr in line for hdr in ["LOC:", "BIN:", "PN:", "SN:", "QTY EMRO:", "QTY ACT:", "REMARK:", "REMARKS:", "QTY:"]):
+                        is_pure_report = False
+                        break
+                if is_pure_report:
                     continue
                 
                 pns_found = re.findall(r'(?:PN|ALT)\s*:\s*([^\n\s\r]+)|(?:PN|ALT)\s+([^\n\s\r:]+)', clean_text, re.IGNORECASE)
@@ -130,20 +147,14 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                             else:
                                 wa_combo_evidence[(pn_clean, "generic")] = evidence_str
 
-    # 2. BACA FILE MASTER EXCEL AUDIT (HANYA MENGAMBIL TAB UTAMA 'WORKSHEET')
+    # 2. BACA FILE MASTER EXCEL AUDIT (HANYA TAB 'WORKSHEET' UTAMA)
     xls = pd.ExcelFile(io.BytesIO(excel_bytes))
-    raw_sheets = xls.sheet_names
+    target_sheets = [s for s in xls.sheet_names if s.lower() == 'worksheet']
     
-    # FILTER KETAT: Cari sheet utama dengan nama persis 'Worksheet' (case-insensitive)
-    target_sheets = [s for s in raw_sheets if s.lower() == 'worksheet']
-    
-    # Fallback aman: jika tab bernama 'Worksheet' tidak ditemukan sama sekali, baru cari tab yang ada kata 'DATA'
     if not target_sheets:
-        target_sheets = [s for s in raw_sheets if 'DATA' in s.upper() and 'OLD' not in s.upper() and 'PREV' not in s.upper()]
-    
-    # Jika masih zonk, ambil sheet pertama yang aktif yang bukan sheet backup tersembunyi
+        target_sheets = [s for s in xls.sheet_names if 'DATA' in s.upper() and 'OLD' not in s.upper() and 'PREV' not in s.upper()]
     if not target_sheets:
-        target_sheets = [s for s in raw_sheets if 'OLD' not in s.upper() and 'PREV' not in s.upper()][:1]
+        target_sheets = [s for s in xls.sheet_names if 'OLD' not in s.upper() and 'PREV' not in s.upper()][:1]
         
     all_reconciled_dfs = []
     
@@ -154,7 +165,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         if 'Status' not in df_master.columns or 'PN' not in df_master.columns:
             continue
             
-        # HANYA menyaring baris data yang statusnya 'OPEN' di tab utama ini
         df_open = df_master[df_master['Status'].astype(str).str.strip().str.upper() == 'OPEN'].copy()
         if df_open.empty:
             continue
@@ -172,7 +182,7 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         df_open['Asal_Sheet'] = sheet
         df_open['Pembelaan WhatsApp Lapangan'] = df_open.apply(get_evidence_combo, axis=1)
         
-        # Buang yang tidak dapat pembelaan di WA
+        # HANYA meloloskan data yang benar-benar memiliki text pembelaan valid
         df_open = df_open[df_open['Pembelaan WhatsApp Lapangan'] != "-"].copy()
         
         if 'Result' in df_open.columns:
@@ -194,10 +204,10 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     return total_chat_in_range, df_final
 
 if wa_file is not None and excel_file is not None:
-    with st.spinner("Sedang memproses rekonsiliasi Worksheet Utama secara eksklusif... Mohon tunggu..."):
+    with st.spinner("Sedang menyeleksi murni kalimat pembelaan riil... Mohon tunggu..."):
         total_chats, df_final_open = process_whatsapp_and_excel(
-            wa_file.uploader.getvalue() if hasattr(wa_file, 'uploader') else wa_file.getvalue(), 
-            excel_file.uploader.getvalue() if hasattr(excel_file, 'uploader') else excel_file.getvalue(), 
+            wa_file.getvalue(), 
+            excel_file.getvalue(), 
             start_dt, 
             end_dt
         )
@@ -205,24 +215,24 @@ if wa_file is not None and excel_file is not None:
     st.info(f"🔹 Hasil Scan WhatsApp: Ditemukan {total_chats} balon chat di dalam rentang tanggal pilihan.")
     
     if not df_final_open.empty:
-        st.success(f"🎯 Sukses Mutlak! Berhasil merangkum {len(df_final_open)} baris temuan OPEN valid dari tab utama.")
+        st.success(f"🎯 Sukses Mutlak! Berhasil merangkum {len(df_final_open)} baris temuan OPEN yang memiliki bukti solusi riil.")
         
-        st.markdown("### 📊 Preview Hasil Rekonsiliasi (100% Bebas Sampah Sheet Lama)")
+        st.markdown("### 📊 Preview Hasil Rekonsiliasi Murni")
         st.dataframe(df_final_open, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_final_open.to_excel(writer, index=False, sheet_name='Hasil_Rekonsil_Murni')
+            df_final_open.to_excel(writer, index=False, sheet_name='Hasil_Murni')
             
-        st.markdown("### 📥 Download Hasil Rekap Murni Ter-Filter")
+        st.markdown("### 📥 Download Hasil Rekap Murni")
         st.download_button(
-            label="📊 Download Excel Rekonsiliasi Murni Ter-Filter (.xlsx)",
+            label="📊 Download Excel Rekonsiliasi Murni (.xlsx)",
             data=buffer.getvalue(),
-            file_name="hasil_rekonsiliasi_pembelaan_murni_fix.xlsx",
+            file_name="hasil_rekonsiliasi_murni_perfect.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
     else:
-        st.warning("⚠️ Tidak ada kecocokan data 'OPEN' dari Worksheet Utama yang memiliki pembelaan/solusi valid di WhatsApp.")
+        st.warning("⚠️ Tidak ada data 'OPEN' dari Worksheet Utama yang memiliki pembelaan/solusi valid di WhatsApp.")
 else:
     st.info("👋 Silakan upload file Excel Stock Opname dan file TXT Chat WhatsApp lo di atas untuk memulai.")
