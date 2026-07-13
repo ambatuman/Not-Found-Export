@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("📊 WhatsApp Audit Reconciler (Pure Precision Engine)")
-st.write("Versi Kustom Kolom: Menampilkan SN dan menempatkan Jenis Finding di antara Diff & Status.")
+st.write("Versi Anti-Data-Purba: Prioritas Sheet Akurat & Karantina Duplikasi Status OPEN.")
 
 st.divider()
 
@@ -33,11 +33,8 @@ with col2:
     st.markdown("### 2️⃣ File Excel Audit Master")
     excel_file = st.file_uploader("Upload Master Excel Stock Take (.xlsx):", type=["xlsx"])
 
-# Fungsi internal mengekstrak teks penyelesaian dari chat secara cerdas
 def extract_clean_evidence(clean_text):
     lines = clean_text.split("\n")
-    
-    # 1. Cari baris PENYELESAIAN (mentolerir typo seperti PENYELSAIAN)
     for idx, line in enumerate(lines):
         if re.search(r'PENYEL[E]*SAIAN', line, re.IGNORECASE) or any(k in line.upper() for k in ["COMPLETED", "COMPLITED", "DONE SIGNED"]):
             if ":" in line:
@@ -50,7 +47,6 @@ def extract_clean_evidence(clean_text):
                 evidence_lines = [l.strip() for l in lines[idx:] if l.strip()]
                 return " | ".join(evidence_lines)
                 
-    # 2. Jika tidak ada penanda penyelesaian di atas, ambil baris non-identitas terbawah
     meaningful_lines = []
     for line in lines:
         l_upper = line.upper()
@@ -113,7 +109,7 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                         flattened_pns.append(p_val.strip().lower())
                 
                 if not flattened_pns:
-                    words = re.findall(r'\b(MS\d+-\d+|BACP\w+|BACS\w+)\b', clean_text, re.IGNORECASE)
+                    words = re.findall(r'\b(MS\d+-\d+|BACP\w+|BACS\w+|NSA\w+-\w+)\b', clean_text, re.IGNORECASE)
                     flattened_pns = [w.strip().lower() for w in words]
                 
                 bin_match = re.search(r'BIN\s*:\s*([^\n\s\r]+)|BIN\s+([^\n\s\r:]+)', clean_text, re.IGNORECASE)
@@ -134,20 +130,36 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                             else:
                                 wa_combo_evidence[(pn_clean, "generic")] = evidence_str
 
-    # 2. BACA DATA MASTER EXCEL AUDIT
+    # 2. BACA & URUTKAN SHEET EXCEL SECARA CERDAS
     xls = pd.ExcelFile(io.BytesIO(excel_bytes))
-    data_sheets = [sheet for sheet in xls.sheet_names if 'DATA' in sheet.upper()]
-    if not data_sheets:
-        data_sheets = [xls.sheet_names[0]]
-        
-    all_reconciled_dfs = []
+    raw_sheets = xls.sheet_names
     
-    for sheet in data_sheets:
+    # Kelompokkan prioritas: Worksheet utama didahulukan, sheet 'OLD/PREV' ditaruh paling belakang
+    sorted_sheets = []
+    worksheets_main = [s for s in raw_sheets if s.lower() == 'worksheet']
+    data_sheets = [s for s in raw_sheets if 'DATA' in s.upper() and s.lower() != 'worksheet']
+    other_sheets = [s for s in raw_sheets if s.lower() != 'worksheet' and 'DATA' not in s.upper() and 'OLD' not in s.upper() and 'PREV' not in s.upper()]
+    old_sheets = [s for s in raw_sheets if 'OLD' in s.upper() or 'PREV' in s.upper()]
+    
+    sorted_sheets = worksheets_main + data_sheets + other_sheets + old_sheets
+    
+    all_reconciled_dfs = []
+    # Set pelacak combo (PN + BIN) yang sudah sukses ditutup di sheet utama
+    closed_combos = set()
+    
+    for sheet in sorted_sheets:
         df_master = pd.read_excel(xls, sheet_name=sheet)
         df_master.columns = df_master.columns.str.strip()
         
         if 'Status' not in df_master.columns or 'PN' not in df_master.columns:
             continue
+            
+        # Catat combo PN + BIN yang status riilnya sudah CLOSED / MATCHED di sheet utama agar sheet jadul tidak lolos
+        df_non_open = df_master[df_master['Status'].astype(str).str.strip().str.upper().isin(['CLOSED', 'MATCHED'])].copy()
+        for _, r_non in df_non_open.iterrows():
+            pn_k = str(r_non['PN']).strip().lower()
+            bin_k = str(r_non['BIN']).strip().lower() if 'BIN' in df_master.columns else ""
+            closed_combos.add((pn_k, bin_k))
             
         df_open = df_master[df_master['Status'].astype(str).str.strip().str.upper() == 'OPEN'].copy()
         if df_open.empty:
@@ -157,6 +169,10 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             pn_str = str(row_data['PN']).strip().lower()
             bin_str = str(row_data['BIN']).strip().lower() if 'BIN' in df_open.columns else ""
             
+            # Jika baris ini datang dari sheet cadangan lama TAPI di data master utama dia sudah closed/matched, blokir!
+            if (pn_str, bin_str) in closed_combos and ('OLD' in sheet.upper() or 'PREV' in sheet.upper()):
+                return "-"
+                
             if (pn_str, bin_str) in wa_combo_evidence:
                 return wa_combo_evidence[(pn_str, bin_str)]
             elif (pn_str, "generic") in wa_combo_evidence:
@@ -166,10 +182,8 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         df_open['Asal_Sheet'] = sheet
         df_open['Pembelaan WhatsApp Lapangan'] = df_open.apply(get_evidence_combo, axis=1)
         
-        # Saring data, buang yang kosong (-)
         df_open = df_open[df_open['Pembelaan WhatsApp Lapangan'] != "-"].copy()
         
-        # Petakan Jenis Finding
         if 'Result' in df_open.columns:
             df_open['Jenis Finding'] = df_open['Result']
         elif 'Remark' in df_open.columns:
@@ -177,12 +191,10 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         else:
             df_open['Jenis Finding'] = df_open['Diff'].apply(lambda x: 'MINUS' if x < 0 else ('SURPLUS' if x > 0 else 'DISCREPANCY'))
             
-        # Bersihkan tampilan SN agar rapi (jika ada)
         if 'SN' in df_open.columns:
             df_open['SN'] = df_open['SN'].fillna('-').astype(str).str.strip()
             
         if not df_open.empty:
-            # Urutan Baru: Asal_Sheet, PN, SN, BIN, Qty eMRO, Qty Actual, Diff, Jenis Finding, Status, Pembelaan
             target_cols = ['Asal_Sheet', 'PN', 'SN', 'BIN', 'Qty eMRO', 'Qty Actual', 'Diff', 'Jenis Finding', 'Status', 'Pembelaan WhatsApp Lapangan']
             valid_cols = [c for c in target_cols if c in df_open.columns]
             all_reconciled_dfs.append(df_open[valid_cols])
@@ -191,7 +203,7 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     return total_chat_in_range, df_final
 
 if wa_file is not None and excel_file is not None:
-    with st.spinner("Sedang memproses tata letak kolom baru... Mohon tunggu..."):
+    with st.spinner("Sedang memproses penyelarasan urutan prioritas data... Mohon tunggu..."):
         total_chats, df_final_open = process_whatsapp_and_excel(
             wa_file.getvalue(), 
             excel_file.getvalue(), 
@@ -202,20 +214,20 @@ if wa_file is not None and excel_file is not None:
     st.info(f"🔹 Hasil Scan WhatsApp: Ditemukan {total_chats} balon chat di dalam rentang tanggal pilihan.")
     
     if not df_final_open.empty:
-        st.success(f"🎯 Berhasil merangkum {len(df_final_open)} baris temuan OPEN dengan format tabel ter-update!")
+        st.success(f"🎯 Berhasil merangkum {len(df_final_open)} baris temuan OPEN valid bebas dari gangguan duplikasi data!")
         
-        st.markdown("### 📊 Preview Rekonsiliasi Kolom Kustom")
+        st.markdown("### 📊 Preview Rekonsiliasi Hasil Urutan Cerdas")
         st.dataframe(df_final_open, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_final_open.to_excel(writer, index=False, sheet_name='Pembelaan_Valid_Kustom')
+            df_final_open.to_excel(writer, index=False, sheet_name='Hasil_Rekonsil_Fix')
             
         st.markdown("### 📥 Download Hasil Rekap Data Open Ter-Update")
         st.download_button(
-            label="📊 Download Excel Urutan Kolom Baru (.xlsx)",
+            label="📊 Download Excel Bebas Duplikasi Jamin Akurat (.xlsx)",
             data=buffer.getvalue(),
-            file_name="hasil_rekonsiliasi_pembelaan_so_open_kustom.xlsx",
+            file_name="hasil_rekonsiliasi_pembelaan_perfect_v3.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
