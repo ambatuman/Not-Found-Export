@@ -5,17 +5,17 @@ import io
 from datetime import datetime
 
 st.set_page_config(
-    page_title="WhatsApp Audit Reconciler - Two-File Engine",
+    page_title="WhatsApp Audit Reconciler - Two-File Engine v3",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 WhatsApp Audit Reconciler (Two-File Precision Engine - Fixed)")
-st.write("Versi Akurat Lapangan: Otomatis mengekstrak nilai REMARK langsung dari format chat vertikal sebagai bukti pembelaan.")
+st.title("📊 WhatsApp Audit Reconciler (Two-File Precision Engine - V3 Perfect)")
+st.write("Versi Pemungkas: Menggabungkan balon chat terpisah (rincian finding + konfirmasi lapangan) secara cerdas.")
 
 st.divider()
 
-# --- PILIHAN FILTER TANGGAL (ANTI TERCAMPUR BULAN LALU) ---
+# --- PILIHAN FILTER TANGGAL ---
 st.sidebar.header("📅 Pengaturan Filter Tanggal Chat")
 start_date = st.sidebar.date_input("Tanggal Awal Chat:", value=datetime(2026, 6, 8))
 end_date = st.sidebar.date_input("Tanggal Akhir Chat:", value=datetime(2026, 7, 13))
@@ -57,8 +57,13 @@ if wa_file is not None and excel_file is not None:
             
             if msg_date and (start_dt <= msg_date <= end_dt):
                 clean_text = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*[^:]+:\s*', '', block, flags=re.IGNORECASE).strip()
+                
+                # Ekstrak nama pengirim chat
+                meta_match = re.match(r'^\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*([^:]+):', block.strip())
+                sender = meta_match.group(1).strip() if meta_match else "Store Lapangan"
+                
                 valid_wa_records.append({
-                    "raw_block": block,
+                    "sender": sender,
                     "clean_text": clean_text,
                     "text_lower": clean_text.lower()
                 })
@@ -79,20 +84,22 @@ if wa_file is not None and excel_file is not None:
             if df_open.empty:
                 st.warning("⚠️ Tidak ada data berstatus 'OPEN' yang perlu dicari pembelaannya.")
             else:
-                st.success(f"🎯 Terdeteksi {len(df_open)} baris temuan berstatus OPEN di Excel. Memulai sinkronisasi data...")
+                st.success(f"🎯 Terdeteksi {len(df_open)} baris temuan berstatus OPEN di Excel. Memulai sinkronisasi cerdas...")
                 
                 pembelaan_list = []
                 
+                # LOOPING UTAMA DATA OPEN EXCEL
                 for idx, row in df_open.iterrows():
                     pn_target = str(row['PN']).strip().lower()
                     no_finding_target = str(row['No']).strip() if 'No' in df_open.columns else ""
                     
                     found_evidence = "-"
                     
-                    for wa in reversed(valid_wa_records):
+                    # Cari index chat yang cocok
+                    for i, wa in enumerate(valid_wa_records):
                         chat_lower = wa['text_lower']
                         
-                        # Cek kecocokan nomor finding atau nomor part number (PN)
+                        # Cek kecocokan Finding Number atau Part Number
                         has_finding_no_match = False
                         if no_finding_target:
                             no_patterns = [rf'\bno\s*{no_finding_target}\b', rf'\bfinding\s*no\s*{no_finding_target}\b', rf'\bno\.\s*{no_finding_target}\b']
@@ -102,25 +109,27 @@ if wa_file is not None and excel_file is not None:
                         has_pn_match = (len(pn_target) > 3 and pn_target in chat_lower)
                         
                         if has_finding_no_match or has_pn_match:
-                            # Ekstrak nama pengirim chat
-                            meta_match = re.match(r'^([^\n]+-\s*[^:]+):', wa['raw_block'].strip())
-                            meta_info = meta_match.group(1) if meta_match else "Store Lapangan"
+                            # Teks utama dari balon chat berisi info PN
+                            main_text = wa['clean_text'].replace('\n', ' | ')
+                            found_evidence = f"[{wa['sender']}] -> {main_text}"
                             
-                            # Jika chat tersebut punya baris REMARK internal, ambil isi remark-nya langsung!
-                            lines = wa['clean_text'].split("\n")
-                            extracted_remark = ""
-                            for line in lines:
-                                if "REMARK" in line.upper() and ":" in line:
-                                    extracted_remark = line.split(":", 1)[-1].strip()
-                                    break
+                            # LOGIKA SMART CONTEXT LOOK-AHEAD: Intip hingga 3 pesan setelahnya untuk mencari konfirmasi sukses
+                            follow_up_texts = []
+                            for j in range(i + 1, min(i + 4, len(valid_wa_records))):
+                                next_wa = valid_wa_records[j]
+                                next_text_lower = next_wa['text_lower']
+                                
+                                # Jika pesan selanjutnya super pendek dan mengandung kata konfirmasi/solusi
+                                if any(k in next_text_lower for k in ["done", "issued", "rts", "match", "found", "solved"]):
+                                    # Cegah ketariknya finding baru orang lain yang tidak sengaja berurutan
+                                    if "pn :" not in next_text_lower and "loc :" not in next_text_lower:
+                                        follow_up_texts.append(f"[{next_wa['sender']}: {next_wa['clean_text']}]")
                             
-                            if extracted_remark:
-                                found_evidence = f"[{meta_info}] -> {extracted_remark}"
-                            else:
-                                # Jika tidak pakai format, ambil baris pertama kalimat chatnya
-                                first_line = lines[0] if lines else wa['clean_text']
-                                found_evidence = f"[{meta_info}] -> {first_line}"
-                            break
+                            if follow_up_texts:
+                                found_evidence += " | FOLLOW-UP: " + " -> ".join(follow_up_texts)
+                            
+                            # Update dengan temuan paling baru jika ada duplikasi chat di bawah
+                            continue 
                                 
                     pembelaan_list.append(found_evidence)
                 
