@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("📊 WhatsApp Audit Reconciler (Pure Precision Engine)")
-st.write("Versi Super Kilat (Optimized Engine): Pembelaan dicari menggunakan indexing cepat untuk menghindari lag.")
+st.write("Versi Super Kilat & Cerdas: Pengecekan instan dengan ekstraksi otomatis baris *PENYELESAIAN*.")
 
 st.divider()
 
@@ -33,14 +33,39 @@ with col2:
     st.markdown("### 2️⃣ File Excel Audit Master")
     excel_file = st.file_uploader("Upload Master Excel Stock Take (.xlsx):", type=["xlsx"])
 
-# Fungsi untuk memproses data chat WA dan membangun index pembelaan secara cepat
+# Fungsi internal untuk memotong teks bukti penyelesaian secara cerdas
+def extract_clean_evidence(clean_text):
+    lines = clean_text.split("\n")
+    
+    # 1. Prioritas Utama: Cari kata PENYELESAIAN terlebih dahulu
+    for idx, line in enumerate(lines):
+        if "PENYELESAIAN" in line.upper():
+            if ":" in line:
+                evidence = line.split(":", 1)[-1].strip()
+                remaining_lines = [l.strip() for l in lines[idx+1:] if l.strip()]
+                if remaining_lines:
+                    evidence += " | " + " | ".join(remaining_lines)
+                return evidence
+            else:
+                # Menangani format tanpa titik dua seperti *PENYELESAIAN PENDING ISSUED DONE...*
+                evidence_lines = [l.strip() for l in lines[idx:] if l.strip()]
+                return " | ".join(evidence_lines)
+                
+    # 2. Prioritas Kedua: Jika tidak ada kata PENYELESAIAN, baru ambil kata REMARK
+    for idx, line in enumerate(lines):
+        if any(r in line.upper() for r in ["REMARK", "REMAKS"]) and ":" in line:
+            return line.split(":", 1)[-1].strip()
+            
+    # 3. Fallback: Jika tidak ada format teratur, ambil seluruh baris chat dipisah pipa
+    return clean_text.replace('\n', ' | ')
+
+# Fungsi komputasi utama ter-cache agar loading instant
 @st.cache_data
 def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     # 1. PARSING WHATSAPP CHAT
     wa_string = wa_bytes.decode("utf-8")
     message_blocks = re.split(r'(?=\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*)', wa_string)
     
-    # Dictionary untuk menyimpan pembaruan pembelaan berdasarkan PN (Key: PN bersih, Value: Bukti)
     wa_indexed_evidence = {}
     total_chat_in_range = 0
     
@@ -50,8 +75,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         "penyele", "penyelesaian"
     ]
     
-    # Lakukan scanning maju biasa. Karena kita mau ambil yang paling terupdate/terakhir, 
-    # proses ini otomatis menimpa entri lama di dictionary jika PN-nya sama.
     for block in message_blocks:
         if not block.strip():
             continue
@@ -74,22 +97,13 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                 sender = meta_match.group(1).strip() if meta_match else "Store Lapangan"
                 
                 text_lower = clean_text.lower()
-                
-                # Cari pola "PN : XXXXX" di dalam balon chat saat ini
                 pns_found = re.findall(r'PN\s*:\s*([^\n\s\r]+)', clean_text, re.IGNORECASE)
                 
-                # Jika balon chat mengandung bukti penyelesaian valid
+                # Validasi apakah balon chat mengandung penyelesaian valid
                 if any(k in text_lower for k in keywords_valid_solusi):
-                    lines = clean_text.split("\n")
-                    extracted_remark = ""
-                    for line in lines:
-                        if any(r in line.upper() for r in ["PENYELESAIAN", "REMARK", "REMAKS"]) and ":" in line:
-                            extracted_remark = line.split(":", 1)[-1].strip()
-                            break
+                    extracted_text = extract_clean_evidence(clean_text)
+                    evidence_str = f"[{sender}] -> {extracted_text}"
                     
-                    evidence_str = f"[{sender}] -> {extracted_remark}" if extracted_remark else f"[{sender}] -> {clean_text.replace('\n', ' | ')}"
-                    
-                    # Petakan bukti chat ini ke setiap PN yang tertulis di dalam balon chat tersebut
                     for pn in pns_found:
                         pn_clean = pn.strip().lower()
                         if len(pn_clean) > 3:
@@ -114,7 +128,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         if df_open.empty:
             continue
             
-        # Gunakan fungsi map/apply pandas yang jauh lebih cepat dibanding loop baris manual
         def get_evidence(pn_val):
             pn_str = str(pn_val).strip().lower()
             return wa_indexed_evidence.get(pn_str, "-")
@@ -127,7 +140,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     return total_chat_in_range, df_final
 
 if wa_file is not None and excel_file is not None:
-    # Memanggil fungsi pemrosesan ter-cache
     with st.spinner("Sedang menyinkronkan data dengan metode cepat... Mohon tunggu..."):
         total_chats, df_final_open = process_whatsapp_and_excel(
             wa_file.getvalue(), 
@@ -148,11 +160,10 @@ if wa_file is not None and excel_file is not None:
         if 'Qty eMRO' in df_final_open.columns: preview_cols.append('Qty eMRO')
         if 'Qty Actual' in df_final_open.columns: preview_cols.append('Qty Actual')
         
-        # Mengambil kolom yang valid saja untuk ditampilkan
         actual_preview_cols = [c for c in preview_cols if c in df_final_open.columns]
         st.dataframe(df_final_open[actual_preview_cols], use_container_width=True)
         
-        # Bungkus ke Excel download
+        # Ekspor ke bytes excel untuk tombol unduh
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
             df_final_open.to_excel(writer, index=False, sheet_name='Hasil_Rekonsiliasi_Open')
