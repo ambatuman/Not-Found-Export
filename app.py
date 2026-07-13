@@ -50,7 +50,7 @@ def extract_clean_evidence(clean_text):
     meaningful_lines = []
     for line in lines:
         l_upper = line.upper()
-        if any(hdr in l_upper for hdr in ["LOC:", "BIN:", "PN:", "SN:", "QTY EMRO:", "QTY ACT:", "REMARKS:", "QTY:"]):
+        if any(hdr in l_upper for hdr in ["LOC", "BIN", "PN", "SN", "QTY EMRO", "QTY ACT", "REMARK", "QTY"]):
             continue
         if line.strip():
             meaningful_lines.append(line.strip())
@@ -69,7 +69,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     wa_combo_evidence = {}
     total_chat_in_range = 0
     
-    # KATA KUNCI VALID: Menghapus total kata 'not completed' agar chat komplain murni tidak lolos
     keywords_valid_solusi = [
         "found", "rts", "match", "issued", "transfer", "pindah", 
         "done", "solved", "terpasang", "di rcm", "di cs", "bagus", "✅",
@@ -99,23 +98,17 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                 
                 text_lower = clean_text.lower()
                 
-                # Cek kevalidan: Harus punya keyword solusi dan BUKAN murni komplain template ("remark : not completed")
                 has_solusi = any(k in text_lower for k in keywords_valid_solusi)
                 has_penyelesaian = bool(re.search(r'PENYEL[E]*SAIAN', text_lower))
                 
-                # Jika chat murni template komplain tanpa ada tindak lanjut solusi nyata, buang!
                 if not (has_solusi or has_penyelesaian):
                     continue
-                    
-                # Validasi tambahan: jika isi chat setelah dibuang metadatanya hanya berisi template komplain, coret.
-                lines_check = [l.upper().strip() for l in clean_text.split('\n') if l.strip()]
-                is_pure_report = True
-                for line in lines_check:
-                    # Jika ada baris tulisan bebas yang bukan template report dasar, berarti ada chat tambahan info
-                    if not any(hdr in line for hdr in ["LOC:", "BIN:", "PN:", "SN:", "QTY EMRO:", "QTY ACT:", "REMARK:", "REMARKS:", "QTY:"]):
-                        is_pure_report = False
-                        break
-                if is_pure_report:
+                
+                # Ekstrak pembelaannya dulu untuk dicek isinya
+                extracted_text = extract_clean_evidence(clean_text).strip()
+                
+                # PROTEKSI ABSOLUT: Jika hasil ekstrak murni cuma teks komplain/kosong, tendang!
+                if extracted_text.upper() in ["NOT COMPLETED", "NOT FOUND", "MINUS", "SURPLUS", "UNRECORD", "UNRECORDED"]:
                     continue
                 
                 pns_found = re.findall(r'(?:PN|ALT)\s*:\s*([^\n\s\r]+)|(?:PN|ALT)\s+([^\n\s\r:]+)', clean_text, re.IGNORECASE)
@@ -137,7 +130,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                         bin_clean = bin_val.strip().lower()
                 
                 if flattened_pns:
-                    extracted_text = extract_clean_evidence(clean_text)
                     evidence_str = f"[{sender}] -> {extracted_text}"
                     
                     for pn_clean in flattened_pns:
@@ -182,7 +174,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         df_open['Asal_Sheet'] = sheet
         df_open['Pembelaan WhatsApp Lapangan'] = df_open.apply(get_evidence_combo, axis=1)
         
-        # HANYA meloloskan data yang benar-benar memiliki text pembelaan valid
         df_open = df_open[df_open['Pembelaan WhatsApp Lapangan'] != "-"].copy()
         
         if 'Result' in df_open.columns:
@@ -233,6 +224,6 @@ if wa_file is not None and excel_file is not None:
             type="primary"
         )
     else:
-        st.warning("⚠️ Tidak ada data 'OPEN' dari Worksheet Utama yang memiliki pembelaan/solusi valid di WhatsApp.")
+        st.warning("⚠️ Tidak ada kecocokan data 'OPEN' dari Worksheet Utama yang memiliki pembelaan/solusi valid di WhatsApp.")
 else:
     st.info("👋 Silakan upload file Excel Stock Opname dan file TXT Chat WhatsApp lo di atas untuk memulai.")
