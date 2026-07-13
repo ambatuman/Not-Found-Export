@@ -2,218 +2,159 @@ import streamlit as st
 import pandas as pd
 import re
 import io
+from datetime import datetime
 
 st.set_page_config(
-    page_title="WhatsApp Audit Extractor - Pure Found Engine",
-    page_icon="✈️",
+    page_title="WhatsApp Audit Reconciler - Two-File Engine",
+    page_icon="📊",
     layout="wide"
 )
 
-st.title("✈️ WhatsApp Automated Audit Extractor (Murni Pembelaan Found)")
-st.write("Versi Pembersihan Total: Hanya menarik barang hilang yang BERHASIL KETEMU (Found/Resolved). Mengabaikan total status Minus, Surplus, dan Still Not Found.")
+st.title("📊 WhatsApp Audit Reconciler (Two-File Precision Engine)")
+st.write("Sistem Pencocokan Otomatis: Mencari pembelaan chat WhatsApp berdasarkan daftar finding Excel yang masih berstatus **OPEN**.")
 
 st.divider()
 
-uploaded_file = st.file_uploader("Upload file chat WhatsApp (.txt) di sini:", type=["txt"])
+# --- PILIHAN FILTER TANGGAL (ANTI TERCAMPUR BULAN LALU) ---
+st.sidebar.header("📅 Pengaturan Filter Tanggal Chat")
+st.sidebar.write("Batasi rentang waktu chat WhatsApp agar obrolan bulan lalu tidak tidak dianggap sebagai penyelesaian audit sekarang.")
 
-if uploaded_file is not None:
-    stringio = io.StringIO(uploaded_file.getvalue().decode("utf-8"))
-    chat_content = stringio.read()
+start_date = st.sidebar.date_input("Tanggal Awal Chat:", value=datetime(2026, 5, 1))
+end_date = st.sidebar.date_input("Tanggal Akhir Chat:", value=datetime(2026, 7, 31))
+
+# Konversi filter tanggal ke objek datetime untuk komparasi logika
+start_dt = datetime.combine(start_date, datetime.min.time())
+end_dt = datetime.combine(end_date, datetime.max.time())
+
+# --- INTERFACE UPLOAD DUA FILE ---
+col1, col2 = st.columns(2)
+
+with col1:
+    st.markdown("### 1️⃣ File Txt WhatsApp")
+    wa_file = st.file_uploader("Upload file chat WhatsApp (.txt):", type=["txt"])
+
+with col2:
+    st.markdown("### 2️⃣ File Excel Audit Master")
+    excel_file = st.file_uploader("Upload Master Excel Stock Take (.xlsx):", type=["xlsx"])
+
+if wa_file is not None and excel_file is not None:
+    # 1. BACA & PARSING WHATSAPP CHAT BERDASARKAN FILTER TANGGAL
+    wa_string = io.StringIO(wa_file.getvalue().decode("utf-8")).read()
     
-    # Pecah per balon chat berdasarkan format timestamp WhatsApp
-    message_blocks = re.split(r'(?=\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*)', chat_content)
+    # Pecah chat berdasarkan timestamp reguler WhatsApp
+    message_blocks = re.split(r'(?=\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*)', wa_string)
     
-    parsed_data = []
+    valid_wa_records = []
     
     for block in message_blocks:
         if not block.strip():
             continue
             
-        block_lower = block.lower()
-        lines = block.split("\n")
-        
-        has_substance = any(x in block_lower for x in ["pn", "pn#", "part", "sn", "sn#", "bin", "loc"])
-        
-        # Jaring awal: Harus ada indikasi barang ketemu/found untuk pembelaan harian
-        if ("not found" in block_lower or "missing" in block_lower or "found" in block_lower) and has_substance:
+        # Ambil timestamp di awal baris chat
+        time_match = re.match(r'^(\d{1,2}/\d{1,2}/\d{2,4}),\s+(\d{1,2}:\d{2})', block.strip())
+        if time_match:
+            date_str = time_match.group(1)
+            # Coba konversi dengan format tahun 2 digit atau 4 digit
+            try:
+                msg_date = datetime.strptime(date_str, "%m/%d/%y")
+            except ValueError:
+                try:
+                    msg_date = datetime.strptime(date_str, "%m/%d/%Y")
+                except ValueError:
+                    msg_date = None
             
-            # --- DETEKSI FORMAT VERTIKAL / STRUCTURED FORM ---
-            is_vertical_format = any(":" in line.strip() and not line.strip().startswith(tuple(str(i) for i in range(10))) for line in lines)
+            # Validasi Kelolosan Filter Tanggal
+            if msg_date and (start_dt <= msg_date <= end_dt):
+                # Bersihkan metadata agar menyisakan isi teks chat bersih
+                clean_text = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*[^:]+:\s*', '', block, flags=re.IGNORECASE).strip()
+                valid_wa_records.append({
+                    "raw_block": block,
+                    "clean_text": clean_text,
+                    "text_lower": clean_text.lower()
+                })
+                
+    st.info(f"🔹 Hasil Scan WhatsApp: Ditemukan {len(valid_wa_records)} baris chat di dalam rentang tanggal pilihan.")
+
+    # 2. BACA DATA MASTER EXCEL AUDIT
+    try:
+        xls = pd.ExcelFile(excel_file)
+        # Prioritas mencari sheet bernama 'Worksheet' atau fallback sheet pertama
+        sheet_target = 'Worksheet' if 'Worksheet' in xls.sheet_names else xls.sheet_names[0]
+        df_master = pd.read_excel(excel_file, sheet_name=sheet_target)
+        
+        # Cek kolom wajib status open
+        if 'Status' not in df_master.columns or 'PN' not in df_master.columns:
+            st.error("❌ Eror: Excel wajib memiliki kolom bernama 'Status' dan 'PN'. Silakan periksa file Excel lu.")
+        else:
+            # Ambil data baris yang murni berstatus OPEN saja
+            df_open = df_master[df_master['Status'].astype(str).str.upper() == 'OPEN'].copy()
             
-            if is_vertical_format:
-                loc_val, bin_val, pn_val, sn_val, qty_val, remark_val = "-", "-", "-", "-", 1, "-"
-                additional_remark = ""
-                has_pn_vertical = False
-                
-                finding_no = ""
-                find_match = re.search(r'(?:Finding No|No Finding|No\.)\s*(\d+)', block, re.IGNORECASE)
-                if find_match and not find_match.group(0).upper().startswith("PN"):
-                    finding_no = f"Finding No.{find_match.group(1)} - "
-                
-                for line in lines:
-                    line_clean = line.strip()
-                    if ":" in line_clean and not line_clean.startswith(tuple(str(i) for i in range(10))):
-                        parts = line_clean.split(":", 1)
-                        key = parts[0].strip().upper()
-                        val = parts[1].strip()
-                        
-                        if "LOC" in key: 
-                            loc_val = val 
-                        elif "BIN EMRO" in key or "BIN ACTUAL" in key or "BIN ACT" in key: 
-                            bin_val = val
-                        elif "BIN" in key and bin_val == "-": 
-                            bin_val = val
-                        elif "P/N" in key or "PN" in key or "PART NUMBER" in key: 
-                            pn_clean_match = re.search(r'([A-Za-z0-9\-/.\s]+)', val)
-                            pn_val = pn_clean_match.group(1).strip() if pn_clean_match else val
-                            if val != "-" and val != "":
-                                has_pn_vertical = True
-                        elif "SN" in key: 
-                            sn_val = val
-                        elif "QTY ACT" in key or "QTY ACTUAL" in key or "QTY" in key:
-                            qty_match = re.search(r'(\d+)', val)
-                            if qty_match: qty_val = int(qty_match.group(1))
-                        elif "REMARK" in key or "REMAKS" in key: 
-                            remark_val = val
-
-                # Tangkap baris kalimat respon storemen di bawah format utama
-                action_text_lines = []
-                for line in lines:
-                    line_upper = line.upper()
-                    if ":" not in line and line.strip() and not line.strip().startswith("*") and not "OMITTED" in line_upper:
-                        action_text_lines.append(line.strip())
-                    elif "PENYELESAIAN" in line_upper or "ACTUAL" in line_upper or "DIPAKAI" in line_upper or "RTS" in line_upper:
-                        if "QTY ACTUAL" not in line_upper:
-                            action_text_lines.append(line.strip())
-
-                action_remark = " ".join(action_text_lines).strip()
-                
-                if remark_val == "-" or remark_val == "": 
-                    remark_val = "NOT FOUND"
-                
-                if action_remark:
-                    remark_val = remark_val + " | Respon: " + action_remark
-                
-                remark_val = finding_no + remark_val
-
-                if has_pn_vertical and pn_val != "-":
-                    parsed_data.append({
-                        "Loc": loc_val, "BIN": bin_val, "PN": pn_val, "SN": sn_val, "Quantity": qty_val, "Remark": remark_val
-                    })
-                
+            if df_open.empty:
+                st.warning("⚠️ Semua data di Excel berstatus MATCHED/CLOSED. Tidak ada data berstatus 'OPEN' yang perlu dicari pembelaannya.")
             else:
-                # --- FORMAT HORIZONTAL / BORONGAN TEKS BEBAS ---
-                clean_block = re.sub(r'^\d{1,2}/\d{1,2}/\d{2,4},\s+\d{1,2}:\d{2}\s*-\s*[^:]+:\s*', '', block, flags=re.IGNORECASE)
-                clean_lines = clean_block.split("\n")
+                st.success(f"🎯 Terdeteksi {len(df_open)} baris temuan berstatus OPEN di Excel. Memulai proses tracking ke WhatsApp...")
                 
-                bin_global = "-"
-                remark_global = "Found"
+                pembelaan_list = []
+                timestamp_list = []
                 
-                for line in clean_lines:
-                    line_upper = line.upper()
-                    if any(k in line_upper for k in ["FOUND AT", "TRANSFER BIN", "TRANSFER TO"]):
-                        bin_match = re.search(r'\b([A-Za-z0-9\s]+-[A-Za-z0-9\s\-]+)\b', line)
-                        if bin_match:
-                            raw_bin = bin_match.group(1).strip()
-                            if "BIN " in raw_bin.upper():
-                                raw_bin = raw_bin.upper().split("BIN ")[-1].strip()
-                            bin_global = raw_bin
-                            break
-                
-                if bin_global == "-":
-                    for line in clean_lines:
-                        bin_match = re.search(r'\b(?:BIN|FOUND AT|DI BIN)\s*#?\s*([A-Za-z0-9\s\-]{2,20})', line, re.IGNORECASE)
-                        if bin_match:
-                            potential_bin = bin_match.group(1).strip()
-                            if not any(x in potential_bin.upper() for x in ["ACTUAL", "BIN", "FOUND", "OMITTED", "PLACED", "DISPSL"]):
-                                bin_global = potential_bin
-                                break
-                            
-                if "FOUND AT " in bin_global.upper():
-                    bin_global = bin_global.upper().split("FOUND AT ")[-1].replace("BIN ", "").strip()
-                
-                loc_global = bin_global.split("-")[0] if "-" in bin_global else "-"
-                
-                for line in reversed(clean_lines):
-                    if any(k in line.upper() for k in ["FOUND", "TRANSFER", "ISSUED", "REMARK"]):
-                        remark_global = line.strip()
-                        break
-                
-                for line in clean_lines:
-                    if any(x in line.upper() for x in ["PN#", "PN ", "PART NUMBER"]):
-                        pn_match = re.search(r'(?:PN#|PN|Part\s*Number)[:\s-]*([A-Za-z0-9\-/.\s]+)', line, re.IGNORECASE)
-                        sn_match = re.search(r'(?:SN#|SN|Serial|S/N)[:\s-]*([A-Za-z0-9\-]+)', line, re.IGNORECASE)
-                        qty_match = re.search(r'(?:QTY#|QTY)[:\s-]*(\d+)|(\d+)\s*(?:pcs|qty|item)', line, re.IGNORECASE)
-                        
-                        if qty_match:
-                            qty_val = int(qty_match.group(1)) if qty_match.group(1) else int(qty_match.group(2))
-                        else:
-                            qty_val = 1
-                            
-                        parsed_data.append({
-                            "Loc": loc_global, "BIN": bin_global, "PN": pn_match.group(1).strip() if pn_match else "-", "SN": sn_match.group(1).strip() if sn_match else "-", "Quantity": qty_val, "Remark": remark_global
-                        })
-
-    if parsed_data:
-        df_raw = pd.DataFrame(parsed_data)
-        
-        # Saring awal dari baris teks instruksi/siluman palsu
-        df_raw = df_raw[~df_raw['PN'].str.upper().str.contains("DAN SN|CONTOH|PART NUMBER", na=False)]
-        df_raw = df_raw[df_raw['PN'].str.len() > 2]
-        
-        # Pembersihan string kotor di kolom BIN
-        def clean_final_bins(val):
-            v_upper = str(val).upper().strip()
-            if v_upper in ["A", "PLACED", "OMITTED", "MEDIA", "<MEDIA", "FOUND", "ACTUAL", "BIN", "ACTUAL BIN", "-"]:
-                return "-"
-            if "BIN " in v_upper:
-                val = str(val).upper().split("BIN ")[-1].strip()
-            return val
-            
-        df_raw['BIN'] = df_raw['BIN'].apply(clean_final_bins)
-        
-        # === FILTER ABSOLUT: HANYA LOLOSKAN BARANG YANG KETEMU (FOUND) ===
-        def filter_pure_found_only(row):
-            rem = str(row['Remark']).upper()
-            
-            # 1. Singkirkan total status sampah harian murni jika tidak ada pembelaan kata found/rts
-            if any(trash in rem for trash in ["SURPLUS", "MINUS", "WRONG BINNING", "UNRECORDED"]) and not "FOUND" in rem and not "RTS" in rem:
-                return False
-                
-            # 2. Jika isi chatnya murni 'NOT FOUND' atau 'MINUS' kosongan tanpa ada bukti ketemunya, BUANG TELAK!
-            if "NOT FOUND" in rem or "MINUS" in rem:
-                if not any(word in rem for word in ["FOUND AT", "RESOLVED", "PENYELESAIAN", "RTS", "ISSUED", "AKTUAL FOUND", "ACTUAL FOUND", "DIPAKAI USER", "TERPAKER", "MATCH"]):
-                    return False
+                # LOOPING PRESISI: Cari pembelaan di WA chat untuk setiap baris barang OPEN
+                for idx, row in df_open.iterrows():
+                    pn_target = str(row['PN']).strip().lower()
+                    no_finding_target = str(row['No']).strip() if 'No' in df_open.columns else ""
                     
-            return True
-
-        df_filtered = df_raw[df_raw.apply(filter_pure_found_only, axis=1)]
-        
-        # Sinkronisasi ulang kolom Loc pasca-pembersihan BIN
-        def sync_clean_loc(row):
-            b_val = str(row['BIN'])
-            l_val = str(row['Loc'])
-            if "-" in b_val and l_val == "-":
-                return b_val.split("-")[0].strip()
-            return l_val
-
-        df_filtered['Loc'] = df_filtered.apply(sync_clean_loc, axis=1)
-        
-        # Rekonsiliasi data duplikat harian (keep='last')
-        df = df_filtered.drop_duplicates(subset=["BIN", "PN", "SN"], keep="last").reset_index(drop=True)
-        
-        st.success(f"🎉 Sempurna! Aplikasi kembali steril murni hanya mengunci data FOUND. Total: {len(df)} baris.")
-        st.dataframe(df, use_container_width=True)
-        
-        buffer = io.BytesIO()
-        with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df.to_excel(writer, index=False, sheet_name='Audit_Findings_Found')
-            
-        st.markdown("### 📥 Download File Excel Gabungan")
-        st.download_button(
-            label="📊 Download File Excel (.xlsx)",
-            data=buffer.getvalue(),
-            file_name="rekap_pembelaan_universal_perfect.xlsx",
-            mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
-            type="primary"
-        )
+                    found_evidence = "-"
+                    evidence_time = "-"
+                    
+                    # Cari chat WA paling terakhir (terupdate) yang membela barang ini
+                    for wa in reversed(valid_wa_records):
+                        chat_lower = wa['text_lower']
+                        
+                        # Indikator 1: Deteksi via kecocokan nomor Finding No (Contoh: No 655 atau Finding No 655)
+                        has_finding_no_match = False
+                        if no_finding_target:
+                            no_patterns = [
+                                rf'\bno\s*{no_finding_target}\b',
+                                rf'\bfinding\s*no\s*{no_finding_target}\b',
+                                rf'\bno\.\s*{no_finding_target}\b'
+                            ]
+                            if any(re.search(pat, chat_lower) for pat in no_patterns):
+                                has_finding_no_match = True
+                                
+                        # Indikator 2: Deteksi langsung lewat nomor part number (PN) unik
+                        has_pn_match = (len(pn_target) > 3 and pn_target in chat_lower)
+                        
+                        if has_finding_no_match or has_pn_match:
+                            # Validasi apakah isi chatnya bernada solusi nyata (bukan sekadar komplain ulang)
+                            keywords_solusi = ["found", "rts", "match", "issued", "transfer", "ada", "sewaktu so", "di rcm", "di cs", "pesawat"]
+                            if any(k in chat_lower for k in keywords_solusi):
+                                # Ekstrak pengirim dan jam waktu
+                                meta_match = re.match(r'^([^\n]+-\s*[^:]+):', wa['raw_block'].strip())
+                                meta_info = meta_match.group(1) if meta_match else "WhatsApp Evidence"
+                                
+                                found_evidence = f"[{meta_info}] -> {wa['clean_text']}"
+                                break
+                                
+                    pembelaan_list.append(found_evidence)
+                
+                # Masukkan hasil pelacakan WhatsApp ke kolom baru Excel
+                df_open['Pembelaan WhatsApp Lapangan'] = pembelaan_list
+                
+                # Tampilkan tabel preview hasil rekonsiliasi data
+                st.markdown("### 📊 Preview Hasil Sinkronisasi Data OPEN vs WhatsApp")
+                st.dataframe(df_open[['No', 'BIN', 'PN', 'Qty eMRO', 'Qty Actual', 'Status', 'Pembelaan WhatsApp Lapangan']], use_container_width=True)
+                
+                # EXPORT KE EXCEL TERBARU
+                buffer = io.BytesIO()
+                with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
+                    df_open.to_excel(writer, index=False, sheet_name='Hasil_Rekonsiliasi_Open')
+                    
+                st.markdown("### 📥 Download Hasil Rekap Data Open Terupdate")
+                st.download_button(
+                    label="📊 Download Excel Pembelaan Ter-Reconcile (.xlsx)",
+                    data=buffer.getvalue(),
+                    file_name="hasil_rekonsiliasi_pembelaan_so_open.xlsx",
+                    mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
+                    type="primary"
+                )
+    except Exception as e:
+        st.error(f"❌ Terjadi kesalahan pembacaan Excel: {str(e)}")
