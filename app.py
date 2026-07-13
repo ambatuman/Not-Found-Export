@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("📊 WhatsApp Audit Reconciler (Pure Precision Engine)")
-st.write("Versi Anti-Duplikasi Sheet: Memblokir duplikasi PN + BIN dari sheet sekunder secara absolut.")
+st.write("Versi Pembersihan Mutlak: Hanya memproses tab Worksheet utama dan memblokir tab cadangan lama secara total.")
 
 st.divider()
 
@@ -130,29 +130,31 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                             else:
                                 wa_combo_evidence[(pn_clean, "generic")] = evidence_str
 
-    # 2. BACA & URUTKAN SHEET EXCEL SECARA CERDAS
+    # 2. BACA FILE MASTER EXCEL AUDIT (HANYA MENGAMBIL TAB UTAMA 'WORKSHEET')
     xls = pd.ExcelFile(io.BytesIO(excel_bytes))
     raw_sheets = xls.sheet_names
     
-    # Kelompokkan prioritas: Halaman 'Worksheet' utama WAJIB dieksekusi paling pertama
-    worksheets_main = [s for s in raw_sheets if s.lower() == 'worksheet']
-    other_sheets = [s for s in raw_sheets if s.lower() != 'worksheet' and 'OLD' not in s.upper() and 'PREV' not in s.upper()]
-    old_sheets = [s for s in raw_sheets if 'OLD' in s.upper() or 'PREV' in s.upper()]
+    # FILTER KETAT: Cari sheet utama dengan nama persis 'Worksheet' (case-insensitive)
+    target_sheets = [s for s in raw_sheets if s.lower() == 'worksheet']
     
-    sorted_sheets = worksheets_main + other_sheets + old_sheets
+    # Fallback aman: jika tab bernama 'Worksheet' tidak ditemukan sama sekali, baru cari tab yang ada kata 'DATA'
+    if not target_sheets:
+        target_sheets = [s for s in raw_sheets if 'DATA' in s.upper() and 'OLD' not in s.upper() and 'PREV' not in s.upper()]
     
+    # Jika masih zonk, ambil sheet pertama yang aktif yang bukan sheet backup tersembunyi
+    if not target_sheets:
+        target_sheets = [s for s in raw_sheets if 'OLD' not in s.upper() and 'PREV' not in s.upper()][:1]
+        
     all_reconciled_dfs = []
     
-    # Pelacak absolut: Jika combo (PN + BIN) sudah diproses di sheet utama, sheet belakang dilarang masuk
-    processed_combos_global = set()
-    
-    for sheet in sorted_sheets:
+    for sheet in target_sheets:
         df_master = pd.read_excel(xls, sheet_name=sheet)
         df_master.columns = df_master.columns.str.strip()
         
         if 'Status' not in df_master.columns or 'PN' not in df_master.columns:
             continue
             
+        # HANYA menyaring baris data yang statusnya 'OPEN' di tab utama ini
         df_open = df_master[df_master['Status'].astype(str).str.strip().str.upper() == 'OPEN'].copy()
         if df_open.empty:
             continue
@@ -161,21 +163,16 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             pn_str = str(row_data['PN']).strip().lower()
             bin_str = str(row_data['BIN']).strip().lower() if 'BIN' in df_open.columns else ""
             
-            # PROTEKSI ABSOLUT: Jika PN + BIN ini sudah ditangani di sheet utama, abaikan duplikatnya dari sheet cadangan lama
-            if (pn_str, bin_str) in processed_combos_global and sheet.lower() != 'worksheet':
-                return "-"
-                
             if (pn_str, bin_str) in wa_combo_evidence:
-                processed_combos_global.add((pn_str, bin_str))
                 return wa_combo_evidence[(pn_str, bin_str)]
             elif (pn_str, "generic") in wa_combo_evidence:
-                processed_combos_global.add((pn_str, bin_str))
                 return wa_combo_evidence[(pn_str, "generic")]
             return "-"
             
         df_open['Asal_Sheet'] = sheet
         df_open['Pembelaan WhatsApp Lapangan'] = df_open.apply(get_evidence_combo, axis=1)
         
+        # Buang yang tidak dapat pembelaan di WA
         df_open = df_open[df_open['Pembelaan WhatsApp Lapangan'] != "-"].copy()
         
         if 'Result' in df_open.columns:
@@ -197,10 +194,10 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     return total_chat_in_range, df_final
 
 if wa_file is not None and excel_file is not None:
-    with st.spinner("Sedang menyaring duplikasi antar sheet master... Mohon tunggu..."):
+    with st.spinner("Sedang memproses rekonsiliasi Worksheet Utama secara eksklusif... Mohon tunggu..."):
         total_chats, df_final_open = process_whatsapp_and_excel(
-            wa_file.getvalue(), 
-            excel_file.getvalue(), 
+            wa_file.uploader.getvalue() if hasattr(wa_file, 'uploader') else wa_file.getvalue(), 
+            excel_file.uploader.getvalue() if hasattr(excel_file, 'uploader') else excel_file.getvalue(), 
             start_dt, 
             end_dt
         )
@@ -208,24 +205,24 @@ if wa_file is not None and excel_file is not None:
     st.info(f"🔹 Hasil Scan WhatsApp: Ditemukan {total_chats} balon chat di dalam rentang tanggal pilihan.")
     
     if not df_final_open.empty:
-        st.success(f"🎯 Berhasil merangkum {len(df_final_open)} baris data OPEN ter-filter super bersih!")
+        st.success(f"🎯 Sukses Mutlak! Berhasil merangkum {len(df_final_open)} baris temuan OPEN valid dari tab utama.")
         
-        st.markdown("### 📊 Preview Rekonsiliasi Hasil Proteksi Absolut")
+        st.markdown("### 📊 Preview Hasil Rekonsiliasi (100% Bebas Sampah Sheet Lama)")
         st.dataframe(df_final_open, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_final_open.to_excel(writer, index=False, sheet_name='Hasil_Rekonsil_Final')
+            df_final_open.to_excel(writer, index=False, sheet_name='Hasil_Rekonsil_Murni')
             
-        st.markdown("### 📥 Download Hasil Rekap Data Open Ter-Filter")
+        st.markdown("### 📥 Download Hasil Rekap Murni Ter-Filter")
         st.download_button(
-            label="📊 Download Excel Bebas Duplikasi Antar Sheet (.xlsx)",
+            label="📊 Download Excel Rekonsiliasi Murni Ter-Filter (.xlsx)",
             data=buffer.getvalue(),
-            file_name="hasil_rekonsiliasi_pembelaan_no_duplicate.xlsx",
+            file_name="hasil_rekonsiliasi_pembelaan_murni_fix.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
     else:
-        st.warning("⚠️ Tidak ada kecocokan data 'OPEN' yang memiliki pembelaan/solusi valid di WhatsApp pada rentang tanggal tersebut.")
+        st.warning("⚠️ Tidak ada kecocokan data 'OPEN' dari Worksheet Utama yang memiliki pembelaan/solusi valid di WhatsApp.")
 else:
     st.info("👋 Silakan upload file Excel Stock Opname dan file TXT Chat WhatsApp lo di atas untuk memulai.")
