@@ -43,7 +43,7 @@ def normalize_str(val):
 
 def extract_full_evidence(clean_text):
     """Mengambil seluruh pesan sebagai bukti tanpa memotong informasi penting"""
-    lines = [l.strip() for l in clean_text.split("\n") if l.strip()]
+    lines = [l.strip() for l in str(clean_text).split("\n") if l.strip()]
     return " | ".join(lines)
 
 
@@ -86,12 +86,12 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             sender_match = re.match(r'^([^:]+):', clean_text)
             sender = sender_match.group(1).strip() if sender_match else "Lapangan"
             
-            # Ekstrak PN (Perbaikan regex A-Za-z0-9)
+            # Ekstrak PN (Perbaikan regex safe)
             pn_matches = re.findall(r'(?:PN|PART|ALT)\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             if not pn_matches:
                 pn_matches = re.findall(r'\b([0-9A-Z]{3,}-[0-9A-Z\-]+)\b', clean_text, re.IGNORECASE)
                 
-            # Ekstrak BIN (Perbaikan regex A-Za-z0-9)
+            # Ekstrak BIN
             bin_match = re.search(r'BIN\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             bin_raw = bin_match.group(1) if bin_match else ""
             
@@ -120,10 +120,10 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         df_raw = pd.read_excel(xls, sheet_name=sheet, header=None)
         header_row = 0
         
-        # Cari baris header secara dinamis
+        # Cari baris header secara dinamis (DIBERSIHKAN AGAR BEBAS TYPEERROR)
         for idx, row in df_raw.iterrows():
-            row_vals = row.astype(str).str.upper().tolist()
-            if any('PN' in x for x in row_vals) and any('STATUS' in x for x in row_vals):
+            row_str = [str(x).upper() for x in row.values if pd.notna(x)]
+            if any('PN' in x for x in row_str) and any('STATUS' in x for x in row_str):
                 header_row = idx
                 break
                 
