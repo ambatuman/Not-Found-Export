@@ -49,17 +49,10 @@ def extract_full_evidence(clean_text):
 
 def is_auditee_solution(clean_text):
     """
-    FUNGSI PENYARING: Memastikan pesan berasal dari pembelaan Auditee (bukan temuan Auditor)
+    FUNGSI PENYARING SUPER KETAT:
+    Hanya meloloskan pesan yang MURNI mengandung kalimat/bukti penyelesaian dari Auditee.
     """
     text_upper = clean_text.upper()
-    
-    # Pattern temuan mentah khas auditor (tanpa solusi)
-    discrepancy_only_patterns = [
-        r'REMARKS\s*:\s*MINUS\s*\d*', 
-        r'REMARKS\s*:\s*NOT FOUND', 
-        r'REMARKS\s*:\s*SURPLUS\s*\d*', 
-        r'REMARKS\s*:\s*UNRECORDED'
-    ]
     
     # Kata kunci bukti/solusi riil dari Auditee
     solution_keywords = [
@@ -70,8 +63,20 @@ def is_auditee_solution(clean_text):
     
     has_solution = any(k in text_upper for k in solution_keywords)
     
-    # Jika pesan hanya berupa declaration finding (misal: REMARKS: MINUS 1) tanpa ada solusi -> ABAIKAN (Auditor)
-    for p in discrepancy_only_patterns:
+    # Jika TIDAK ADA kata kunci solusi sama sekali -> ABAIKAN (Hanya Laporan/Report)
+    if not has_solution:
+        return False
+        
+    # Pola temuan mentah khas auditor (Termasuk angka minus/plus)
+    discrepancy_patterns = [
+        r'REMARKS\s*:\s*MINUS', 
+        r'REMARKS\s*:\s*NOT FOUND', 
+        r'REMARKS\s*:\s*SURPLUS', 
+        r'REMARKS\s*:\s*UNRECORDED',
+        r'REMARKS\s*:\s*[\-\+]?\d+'  # Menangkap REMARKS: -2, REMARKS: -1, REMARKS: +5, dll.
+    ]
+    
+    for p in discrepancy_patterns:
         if re.search(p, text_upper) and not has_solution:
             return False
             
