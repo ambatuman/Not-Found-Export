@@ -86,13 +86,13 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             sender_match = re.match(r'^([^:]+):', clean_text)
             sender = sender_match.group(1).strip() if sender_match else "Lapangan"
             
-            # Ekstrak PN (Mendukung semua pola PN/ALT/Part Number)
-            pn_matches = re.findall(r'(?:PN|PART|ALT)\s*:\s*([A-Za-0-9\-_]+)', clean_text, re.IGNORECASE)
+            # Ekstrak PN (Perbaikan regex A-Za-z0-9)
+            pn_matches = re.findall(r'(?:PN|PART|ALT)\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             if not pn_matches:
                 pn_matches = re.findall(r'\b([0-9A-Z]{3,}-[0-9A-Z\-]+)\b', clean_text, re.IGNORECASE)
                 
-            # Ekstrak BIN
-            bin_match = re.search(r'BIN\s*:\s*([A-Za-0-9\-_]+)', clean_text, re.IGNORECASE)
+            # Ekstrak BIN (Perbaikan regex A-Za-z0-9)
+            bin_match = re.search(r'BIN\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             bin_raw = bin_match.group(1) if bin_match else ""
             
             evidence_text = f"[{sender}] -> {extract_full_evidence(clean_text)}"
