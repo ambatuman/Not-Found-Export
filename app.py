@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("📊 WhatsApp Audit Reconciler (Murni Pembelaan Auditee)")
-st.write("Menyaring & menyajikan KHUSUS pembelaan/solusi dari Auditee (mengabaikan laporan temuan awal dari Auditor).")
+st.write("Menyaring & menyajikan KHUSUS pembelaan/solusi dari Auditee (mengabaikan laporan temuan awal dari Auditor dan mencocokkan SN secara presisi).")
 
 st.divider()
 
@@ -38,7 +38,10 @@ def normalize_str(val):
     """Membersihkan spasi, tanda hubung, dan huruf besar/kecil untuk perbandingan akurat"""
     if not val or pd.isna(val):
         return ""
-    return re.sub(r'[^A-ZA-Z0-9]', '', str(val)).upper()
+    res = re.sub(r'[^A-ZA-Z0-9]', '', str(val)).upper()
+    if res in ['-', 'NONE', 'NAN', 'NA', 'NULL']:
+        return ""
+    return res
 
 
 def extract_full_evidence(clean_text):
@@ -54,33 +57,35 @@ def is_auditee_solution(clean_text):
     """
     text_upper = clean_text.upper()
     
+    # Frasa negatif khas laporan/temuan Auditor
+    negative_indicators = [
+        r'NOT\s+COMPLETED', 
+        r'UNDER\s+INVESTIGATE', 
+        r'NOT\s+FOUND',
+        r'REMARK[S]?\s*:\s*MINUS', 
+        r'REMARK[S]?\s*:\s*SURPLUS', 
+        r'REMARK[S]?\s*:\s*[\-\+]?\d+'
+    ]
+    
     # Kata kunci bukti/solusi riil dari Auditee
     solution_keywords = [
-        "HAS BEEN", "ISSUED", "WO:", "WO ", "T/C", "TASKCARD", "TASK CARD",
-        "RTS", "MATCH", "FOUND", "TRANSFER", "PINDAH", "TERPASANG", 
-        "COMPLETED", "COMPLITED", "PENYELESAIAN", "PENYELSAYAN", "AFML", "MATSLIP"
+        "ALREADY FOUND", "HAS BEEN", "ISSUED", "WO:", "WO ", "T/C", "TASKCARD", "TASK CARD",
+        "RTS", "MATCH TO", "MATCHED", "TRANSFER", "PINDAH", "TERPASANG", 
+        "PENYELESAIAN", "PENYELSAYAN", "AFML", "MATSLIP"
     ]
     
-    has_solution = any(k in text_upper for k in solution_keywords)
+    # Kata 'COMPLETED' hanya valid jika TIDAK diawali kata 'NOT'
+    has_completed = bool(re.search(r'(?<!NOT\s)(?<!NOT\s\s)COMPLETED', text_upper)) or bool(re.search(r'(?<!NOT\s)COMPLITED', text_upper))
+    has_other_solution = any(k in text_upper for k in solution_keywords)
     
-    # Jika TIDAK ADA kata kunci solusi sama sekali -> ABAIKAN (Hanya Laporan/Report)
-    if not has_solution:
+    has_solution = has_completed or has_other_solution
+    has_neg = any(re.search(p, text_upper) for p in negative_indicators)
+    
+    # Jika mengandung indikator negatif (misal: NOT COMPLETED) dan TANPA kata kunci solusi kuat -> ABAIKAN
+    if has_neg and not has_solution:
         return False
         
-    # Pola temuan mentah khas auditor (Termasuk angka minus/plus)
-    discrepancy_patterns = [
-        r'REMARKS\s*:\s*MINUS', 
-        r'REMARKS\s*:\s*NOT FOUND', 
-        r'REMARKS\s*:\s*SURPLUS', 
-        r'REMARKS\s*:\s*UNRECORDED',
-        r'REMARKS\s*:\s*[\-\+]?\d+'  # Menangkap REMARKS: -2, REMARKS: -1, REMARKS: +5, dll.
-    ]
-    
-    for p in discrepancy_patterns:
-        if re.search(p, text_upper) and not has_solution:
-            return False
-            
-    return True
+    return has_solution
 
 
 @st.cache_data
@@ -89,7 +94,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     wa_string = wa_bytes.decode("utf-8", errors="ignore")
     wa_string = wa_string.replace('\u202f', ' ').replace('\xa0', ' ')
     
-    # Split pesan WA berdasarkan pola tanggal
     message_blocks = re.split(r'(?=\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}[,\s]+\d{1,2}:\d{2})', wa_string)
     
     wa_evidence_records = []
@@ -99,7 +103,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         if not block.strip():
             continue
             
-        # Extract tanggal pesan
         date_match = re.search(r'(\d{1,2})[\/\.-](\d{1,2})[\/\.-](\d{2,4})', block)
         msg_date = None
         if date_match:
@@ -122,19 +125,19 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             sender_match = re.match(r'^([^:]+):', clean_text)
             sender = sender_match.group(1).strip() if sender_match else "Auditee Lapangan"
             
-            # CEK APABILA PESAN ADALAH PEMBELAAN AUDITEE (BUKAN TEMUAN AUDITOR)
             if not is_auditee_solution(clean_text):
                 continue
             
-            # Ekstrak LOC
+            # Ekstrak LOC, BIN, SN, PN
             loc_match = re.search(r'LOC\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             loc_raw = loc_match.group(1) if loc_match else ""
             
-            # Ekstrak BIN
             bin_match = re.search(r'BIN\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             bin_raw = bin_match.group(1) if bin_match else ""
 
-            # Ekstrak PN
+            sn_match = re.search(r'SN\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
+            sn_raw = sn_match.group(1) if sn_match else ""
+
             pn_matches = re.findall(r'(?:PN|PART|ALT)\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             if not pn_matches:
                 pn_matches = re.findall(r'\b([0-9A-Z]{3,}-[0-9A-Z\-]+)\b', clean_text, re.IGNORECASE)
@@ -146,11 +149,14 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                     pn_norm = normalize_str(pn)
                     bin_norm = normalize_str(bin_raw)
                     loc_norm = normalize_str(loc_raw)
+                    sn_norm = normalize_str(sn_raw)
+                    
                     if len(pn_norm) >= 3:
                         wa_evidence_records.append({
                             'pn_norm': pn_norm,
                             'bin_norm': bin_norm,
                             'loc_norm': loc_norm,
+                            'sn_norm': sn_norm,
                             'evidence': evidence_text
                         })
 
@@ -159,14 +165,12 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
     all_reconciled_dfs = []
     
     for sheet in xls.sheet_names:
-        # Abaikan sheet rekapitulasi/lookup
         if sheet.upper() in ['SUMMARY', 'LOOKUP ANDIKA', 'LAST SO', 'PART STATUS MISSING']:
             continue
             
         df_raw = pd.read_excel(xls, sheet_name=sheet, header=None)
         header_row = 0
         
-        # Cari baris header secara dinamis (Aman dari TypeError)
         for idx, row in df_raw.iterrows():
             row_str = [str(x).upper() for x in row.values if pd.notna(x)]
             if any('PN' in x for x in row_str) and any('STATUS' in x for x in row_str):
@@ -176,11 +180,11 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         df_master = pd.read_excel(xls, sheet_name=sheet, header=header_row)
         df_master.columns = df_master.columns.astype(str).str.strip()
         
-        # Deteksi nama kolom fleksibel
         pn_col = next((c for c in df_master.columns if 'PN' in c.upper() or 'PART' in c.upper()), None)
         status_col = next((c for c in df_master.columns if 'STATUS' in c.upper()), None)
         loc_col = next((c for c in df_master.columns if 'LOC' in c.upper() or 'LOCATION' in c.upper()), None)
         bin_col = next((c for c in df_master.columns if 'BIN' in c.upper()), None)
+        sn_col = next((c for c in df_master.columns if 'SN' in c.upper() or 'SERIAL' in c.upper()), None)
         
         if not pn_col or not status_col:
             continue
@@ -193,16 +197,20 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             pn_val = normalize_str(row[pn_col])
             bin_val = normalize_str(row[bin_col]) if bin_col and pd.notna(row[bin_col]) else ""
             loc_val = normalize_str(row[loc_col]) if loc_col and pd.notna(row[loc_col]) else ""
+            sn_val = normalize_str(row[sn_col]) if sn_col and pd.notna(row[sn_col]) else ""
             
             matched_evidences = []
             for record in wa_evidence_records:
                 if record['pn_norm'] == pn_val:
-                    # Match BIN jika ada
                     bin_match_ok = not bin_val or not record['bin_norm'] or record['bin_norm'] == bin_val
-                    # Match LOC jika ada
                     loc_match_ok = not loc_val or not record['loc_norm'] or record['loc_norm'] == loc_val
                     
-                    if bin_match_ok and loc_match_ok:
+                    # PRESISI SN: Jika Excel dan WA sama-sama punya SN, Wajib Exact Match!
+                    sn_match_ok = True
+                    if sn_val and record['sn_norm']:
+                        sn_match_ok = (sn_val == record['sn_norm'])
+                    
+                    if bin_match_ok and loc_match_ok and sn_match_ok:
                         matched_evidences.append(record['evidence'])
                         
             if matched_evidences:
@@ -212,7 +220,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
         df_open['Asal_Sheet'] = sheet
         df_open['Pembelaan WhatsApp Lapangan'] = df_open.apply(find_matching_wa, axis=1)
         
-        # Ambil seluruh baris yang berhasil menemukan bukti WA
         df_matched = df_open[df_open['Pembelaan WhatsApp Lapangan'] != "-"].copy()
         
         if 'Result' in df_matched.columns:
@@ -228,7 +235,6 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             df_matched['SN'] = df_matched['SN'].fillna('-').astype(str).str.strip()
             
         if not df_matched.empty:
-            # Kolom Target Termasuk LOC
             target_cols = ['Asal_Sheet', 'LOC', 'BIN', 'PN', 'SN', 'Qty eMRO', 'Qty Actual', 'Diff', 'Jenis Finding', 'Status', 'Pembelaan WhatsApp Lapangan']
             valid_cols = [c for c in target_cols if c in df_matched.columns]
             all_reconciled_dfs.append(df_matched[valid_cols])
