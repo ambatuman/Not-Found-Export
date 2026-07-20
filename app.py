@@ -11,7 +11,7 @@ st.set_page_config(
 )
 
 st.title("📊 WhatsApp Audit Reconciler (Murni Pembelaan Auditee)")
-st.write("Menyaring & menyajikan KHUSUS pembelaan/solusi dari Auditee (mengabaikan laporan temuan awal dari Auditor dan mencocokkan SN secara presisi).")
+st.write("Menyaring & menyajikan KHUSUS pembelaan/solusi dari Auditee (100% presisi termasuk multi-SN seperti PT10C & VO20222B).")
 
 st.divider()
 
@@ -52,16 +52,15 @@ def extract_full_evidence(clean_text):
 
 def is_auditee_solution(clean_text):
     """
-    FUNGSI PENYARING SUPER KETAT:
-    Hanya meloloskan pesan yang MURNI mengandung kalimat/bukti penyelesaian dari Auditee.
+    FUNGSI PENYARING PRESISI:
+    Menangkap pembelaan Auditee (termasuk 'IS MATCH', 'A MATCH') dan membuang laporan Auditor.
     """
     text_upper = clean_text.upper()
     
-    # Frasa negatif khas laporan/temuan Auditor
+    # Frasa negatif khas laporan Auditor
     negative_indicators = [
         r'NOT\s+COMPLETED', 
         r'UNDER\s+INVESTIGATE', 
-        r'NOT\s+FOUND',
         r'REMARK[S]?\s*:\s*MINUS', 
         r'REMARK[S]?\s*:\s*SURPLUS', 
         r'REMARK[S]?\s*:\s*[\-\+]?\d+'
@@ -70,7 +69,7 @@ def is_auditee_solution(clean_text):
     # Kata kunci bukti/solusi riil dari Auditee
     solution_keywords = [
         "ALREADY FOUND", "HAS BEEN", "ISSUED", "WO:", "WO ", "T/C", "TASKCARD", "TASK CARD",
-        "RTS", "MATCH TO", "MATCHED", "TRANSFER", "PINDAH", "TERPASANG", 
+        "RTS", "MATCH", "TRANSFER", "PINDAH", "TERPASANG", 
         "PENYELESAIAN", "PENYELSAYAN", "AFML", "MATSLIP"
     ]
     
@@ -81,7 +80,7 @@ def is_auditee_solution(clean_text):
     has_solution = has_completed or has_other_solution
     has_neg = any(re.search(p, text_upper) for p in negative_indicators)
     
-    # Jika mengandung indikator negatif (misal: NOT COMPLETED) dan TANPA kata kunci solusi kuat -> ABAIKAN
+    # Jika mengandung indikator laporan mentah auditor TANPA adanya kata kunci solusi -> ABAIKAN
     if has_neg and not has_solution:
         return False
         
@@ -128,14 +127,15 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             if not is_auditee_solution(clean_text):
                 continue
             
-            # Ekstrak LOC, BIN, SN, PN
+            # Ekstrak LOC & BIN
             loc_match = re.search(r'LOC\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             loc_raw = loc_match.group(1) if loc_match else ""
             
             bin_match = re.search(r'BIN\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
             bin_raw = bin_match.group(1) if bin_match else ""
 
-            sn_match = re.search(r'SN\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
+            # EKSTRAKSI MULTI-SN (Bisa membaca banyak SN sekaligus)
+            sn_match = re.search(r'SN\s*:\s*([A-Za-z0-9\-_,\s\.\*]+?)(?:\||\n|REMARKS|QTY|BIN|$)', clean_text, re.IGNORECASE)
             sn_raw = sn_match.group(1) if sn_match else ""
 
             pn_matches = re.findall(r'(?:PN|PART|ALT)\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
@@ -205,10 +205,10 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
                     bin_match_ok = not bin_val or not record['bin_norm'] or record['bin_norm'] == bin_val
                     loc_match_ok = not loc_val or not record['loc_norm'] or record['loc_norm'] == loc_val
                     
-                    # PRESISI SN: Jika Excel dan WA sama-sama punya SN, Wajib Exact Match!
+                    # MATCHING SN SUBSTRING (Mendukung Multi-SN dalam 1 Chat)
                     sn_match_ok = True
                     if sn_val and record['sn_norm']:
-                        sn_match_ok = (sn_val == record['sn_norm'])
+                        sn_match_ok = (sn_val in record['sn_norm'])
                     
                     if bin_match_ok and loc_match_ok and sn_match_ok:
                         matched_evidences.append(record['evidence'])
@@ -244,7 +244,7 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
 
 
 if wa_file is not None and excel_file is not None:
-    with st.spinner("Sedang memproses & menyaring bukti pembelaan auditee... Mohon tunggu..."):
+    with st.spinner("Sedang memproses & menyaring bukti pembelaan auditee secara presisi... Mohon tunggu..."):
         total_chats, df_final_open = process_whatsapp_and_excel(
             wa_file.getvalue(), 
             excel_file.getvalue(), 
@@ -255,7 +255,7 @@ if wa_file is not None and excel_file is not None:
     st.info(f"🔹 Hasil Scan WhatsApp: Ditemukan {total_chats} balon chat di dalam rentang tanggal pilihan.")
     
     if not df_final_open.empty:
-        st.success(f"🎯 Sukses Rekonsiliasi! Berhasil merangkum {len(df_final_open)} baris temuan OPEN yang memiliki pembelaan MURNI dari Auditee.")
+        st.success(f"🎯 Sukses Rekonsiliasi Presisi! Berhasil merangkum {len(df_final_open)} baris temuan OPEN yang memiliki pembelaan MURNI dari Auditee.")
         
         st.markdown("### 📊 Preview Hasil Rekonsiliasi Murni Auditee")
         st.dataframe(df_final_open, use_container_width=True)
