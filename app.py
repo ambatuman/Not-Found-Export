@@ -5,13 +5,13 @@ import io
 from datetime import datetime
 
 st.set_page_config(
-    page_title="WhatsApp Audit Reconciler - Perfect Zero-Loss Engine",
+    page_title="WhatsApp Audit Reconciler - Auditee Evidence Engine",
     page_icon="📊",
     layout="wide"
 )
 
-st.title("📊 WhatsApp Audit Reconciler (Zero-Loss Engine)")
-st.write("Versi Pembersihan Presisi: Menangkap 100% temuan OPEN yang memiliki bukti/pembelaan di grup WhatsApp.")
+st.title("📊 WhatsApp Audit Reconciler (Murni Pembelaan Auditee)")
+st.write("Menyaring & menyajikan KHUSUS pembelaan/solusi dari Auditee (mengabaikan laporan temuan awal dari Auditor).")
 
 st.divider()
 
@@ -45,6 +45,37 @@ def extract_full_evidence(clean_text):
     """Mengambil seluruh pesan sebagai bukti tanpa memotong informasi penting"""
     lines = [l.strip() for l in str(clean_text).split("\n") if l.strip()]
     return " | ".join(lines)
+
+
+def is_auditee_solution(clean_text):
+    """
+    FUNGSI PENYARING: Memastikan pesan berasal dari pembelaan Auditee (bukan temuan Auditor)
+    """
+    text_upper = clean_text.upper()
+    
+    # Pattern temuan mentah khas auditor (tanpa solusi)
+    discrepancy_only_patterns = [
+        r'REMARKS\s*:\s*MINUS\s*\d*', 
+        r'REMARKS\s*:\s*NOT FOUND', 
+        r'REMARKS\s*:\s*SURPLUS\s*\d*', 
+        r'REMARKS\s*:\s*UNRECORDED'
+    ]
+    
+    # Kata kunci bukti/solusi riil dari Auditee
+    solution_keywords = [
+        "HAS BEEN", "ISSUED", "WO:", "WO ", "T/C", "TASKCARD", "TASK CARD",
+        "RTS", "MATCH", "FOUND", "TRANSFER", "PINDAH", "TERPASANG", 
+        "COMPLETED", "COMPLITED", "PENYELESAIAN", "PENYELSAYAN", "AFML", "MATSLIP"
+    ]
+    
+    has_solution = any(k in text_upper for k in solution_keywords)
+    
+    # Jika pesan hanya berupa declaration finding (misal: REMARKS: MINUS 1) tanpa ada solusi -> ABAIKAN (Auditor)
+    for p in discrepancy_only_patterns:
+        if re.search(p, text_upper) and not has_solution:
+            return False
+            
+    return True
 
 
 @st.cache_data
@@ -84,7 +115,11 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
             
             clean_text = re.sub(r'^\d{1,2}[\/\.-]\d{1,2}[\/\.-]\d{2,4}.*?-\s*', '', block).strip()
             sender_match = re.match(r'^([^:]+):', clean_text)
-            sender = sender_match.group(1).strip() if sender_match else "Lapangan"
+            sender = sender_match.group(1).strip() if sender_match else "Auditee Lapangan"
+            
+            # CEK APABILA PESAN ADALAH PEMBELAAN AUDITEE (BUKAN TEMUAN AUDITOR)
+            if not is_auditee_solution(clean_text):
+                continue
             
             # Ekstrak LOC
             loc_match = re.search(r'LOC\s*:\s*([A-Za-z0-9\-_]+)', clean_text, re.IGNORECASE)
@@ -198,7 +233,7 @@ def process_whatsapp_and_excel(wa_bytes, excel_bytes, start_dt, end_dt):
 
 
 if wa_file is not None and excel_file is not None:
-    with st.spinner("Sedang memproses seluruh data dengan lokasi (LOC)... Mohon tunggu..."):
+    with st.spinner("Sedang memproses & menyaring bukti pembelaan auditee... Mohon tunggu..."):
         total_chats, df_final_open = process_whatsapp_and_excel(
             wa_file.getvalue(), 
             excel_file.getvalue(), 
@@ -209,24 +244,24 @@ if wa_file is not None and excel_file is not None:
     st.info(f"🔹 Hasil Scan WhatsApp: Ditemukan {total_chats} balon chat di dalam rentang tanggal pilihan.")
     
     if not df_final_open.empty:
-        st.success(f"🎯 Sukses Rekonsiliasi! Berhasil merangkum {len(df_final_open)} baris temuan OPEN yang memiliki bukti solusi riil.")
+        st.success(f"🎯 Sukses Rekonsiliasi! Berhasil merangkum {len(df_final_open)} baris temuan OPEN yang memiliki pembelaan MURNI dari Auditee.")
         
-        st.markdown("### 📊 Preview Hasil Rekonsiliasi Murni")
+        st.markdown("### 📊 Preview Hasil Rekonsiliasi Murni Auditee")
         st.dataframe(df_final_open, use_container_width=True)
         
         buffer = io.BytesIO()
         with pd.ExcelWriter(buffer, engine='openpyxl') as writer:
-            df_final_open.to_excel(writer, index=False, sheet_name='Hasil_Murni')
+            df_final_open.to_excel(writer, index=False, sheet_name='Hasil_Murni_Auditee')
             
         st.markdown("### 📥 Download Hasil Rekap Murni")
         st.download_button(
-            label="📊 Download Excel Rekonsiliasi Murni (.xlsx)",
+            label="📊 Download Excel Rekonsiliasi Murni Auditee (.xlsx)",
             data=buffer.getvalue(),
-            file_name="hasil_rekonsiliasi_murni_perfect.xlsx",
+            file_name="hasil_rekonsiliasi_auditee_pure.xlsx",
             mime="application/vnd.openxmlformats-officedocument.spreadsheetml.sheet",
             type="primary"
         )
     else:
-        st.warning("⚠️ Tidak ada kecocokan data 'OPEN' dari Worksheet Utama yang memiliki pembelaan/solusi valid di WhatsApp.")
+        st.warning("⚠️ Tidak ada kecocokan data 'OPEN' dari Worksheet Utama yang memiliki pembelaan/solusi valid dari Auditee di WhatsApp.")
 else:
     st.info("👋 Silakan upload file Excel Stock Opname dan file TXT Chat WhatsApp lo di atas untuk memulai.")
